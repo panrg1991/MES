@@ -1,0 +1,56 @@
+# 依赖目录
+node_modules/
+
+# 构建产物
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 测试覆盖率报告
+coverage/
+
+# 环境变量（不提交敏感配置）
+.env
+.env.production
+.env.development
+*.env.local
+
+# 数据库文件（SQLite 运行时数据，含业务数据，不入库）
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+backend/logs/
+
+# 数据库备份产物（由 npm run db:backup 生成）
+backend/backups/
+
+# 浏览器自动化验证产物（playwright-cli 会话目录与页面快照）
+.playwright-cli/
+*-snapshot.yaml
+
+# Prisma 动态生成的 Client（按库类型生成，由 npm run db:setup 重建）
+backend/prisma/generated/
+backend/prisma/schema.sqlite.prisma
+backend/prisma/schema.mysql.prisma
+
+# 锁文件（保留 package-lock.json，忽略 yarn.lock 和 pnpm-lock.yaml）
+yarn.lock
+pnpm-lock.yaml

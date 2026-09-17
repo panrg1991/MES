@@ -1,0 +1,179 @@
+# =============================================================================
+# MES 车间制造执行系统 - 前端 Nginx 站点配置示例
+# =============================================================================
+# 用途：将 `frontend/dist` 打包产物以静态站点方式托管，并把 /api 反向代理到后端，
+#       使浏览器侧全部请求保持「同源」，从根本上避免跨域（CORS）问题。
+#
+# 前置条件：
+#   1. 已在 frontend/ 执行 `npm ci && npm run build`，得到 dist/ 目录
+#      （dist/index.html + dist/assets/*.js|*.css|*.gz）
+#   2. 后端服务已启动并监听 3000 端口（MES 后端默认端口，可用 curl 验证）：
+#        curl http://127.0.0.1:3000/api/health
+#   3. 前端构建时使用 .env.production 的 VITE_API_BASE_URL=/api（默认即如此）
+#
+# 使用方式（Linux）：
+#   sudo cp deploy/nginx.conf.example /etc/nginx/conf.d/mes-frontend.conf
+#   修改下方 root 为实际 dist 绝对路径
+#   sudo nginx -t && sudo nginx -s reload
+#
+# 使用方式（Windows，Nginx for Windows）：
+#   将本文件内容拷贝进 <nginx目录>/conf/nginx.conf 的 http { } 块内，
+#   root 使用 Windows 路径（注意使用正斜杠，如 D:/mes/frontend/dist），
+#   然后在 nginx 目录执行 `start nginx` / `nginx -s reload`
+# =============================================================================
+
+server {
+    # 对外监听端口（内网可直接 80；如需与其他站点共存请改端口或使用 server_name 区分）
+    listen       80;
+    listen       [::]:80;
+
+    # 无独立域名时用 _ 兜底；有域名则改为 server_name mes.example.com;
+    server_name  _;
+
+    # 字符集：中文文件名/内容不乱码
+    charset utf-8;
+
+    # -------------------------------------------------------------------------
+    # 【关键】前端静态资源根目录 = Vite 构建产物 dist 目录
+    #   Linux 示例：/opt/mes/frontend/dist
+    #   Windows 示例：D:/mes/frontend/dist
+    # 请替换为本机实际绝对路径，且必须是 dist 目录本身（其内直接是 index.html）
+    # -------------------------------------------------------------------------
+    root  /opt/mes/frontend/dist;
+    index index.html;
+
+    # 上传/表单体积上限（当前业务接口不大，预留 10MB 足够）
+    client_max_body_size 10m;
+
+    # =========================================================================
+    # 1) SPA History 路由回退（最重要的一段）
+    #    前端使用 React Router 6 的 history 模式（浏览器地址形如 /equipment/list），
+    #    这些路径在服务器上并无对应物理文件，若不做回退，用户在子页面按 F5 会 404。
+    #    try_files 逻辑：先找同名文件 → 再找同名目录 → 都没有就返回 index.html，
+    #    交由前端路由自行解析。
+    # =========================================================================
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # -------------------------------------------------------------------------
+    # 2) index.html 必须「不缓存」
+    #    原因：打包后 JS/CSS 文件名带内容哈希，index.html 里引用的是新哈希；
+    #    若 index.html 被浏览器/代理缓存，用户会一直加载到旧哈希文件名 → 资源 404 → 白屏。
+    # -------------------------------------------------------------------------
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires -1;
+    }
+
+    # -------------------------------------------------------------------------
+    # 3) assets/ 下为带内容哈希的静态资源，可长期强缓存（1 年）
+    #    文件名变化才会导致缓存失效，因此可以安全地 immutable
+    # -------------------------------------------------------------------------
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        access_log off;
+
+        # vite-plugin-compression 已在构建时生成同名 .gz 文件（> 10KB 的资源），
+        # 若 Nginx 编译包含 ngx_http_gzip_static_module，打开下面一行可直接用预压缩文件，
+        # 省掉运行时压缩的 CPU 开销。若 nginx -t 报 "unknown directive gzip_static"，删掉即可。
+        # gzip_static on;
+    }
+
+    # =========================================================================
+    # 4) /api 反向代理到后端（同源方案的核心）
+    #    ⚠️ 注意 proxy_pass 末尾「不要」加斜杠：
+    #       proxy_pass http://127.0.0.1:3000;      ← 正确，/api/xxx 原样转发到后端
+    #       proxy_pass http://127.0.0.1:3000/;     ← 错误，会把 /api 前缀剥掉，后端全部 404
+    #    后端所有路由都挂在 /api 前缀下（如 GET /api/equipment、POST /api/auth/login）。
+    # =========================================================================
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection        "";
+
+        # 后端有限流（express-rate-limit，按客户端 IP），上面三个头必须透传，
+        # 否则所有请求会被识别为同一个代理 IP，导致误触发限流。
+
+        # 报表导出（Excel）等接口可能耗时较长，读超时适当放大
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+
+        # 导出接口返回二进制流，禁止代理层改写成其他编码
+        proxy_set_header Accept-Encoding "";
+    }
+
+    # =========================================================================
+    # 5) 压缩（gzip）：对文本类资源开启运行时压缩
+    #    若已开启上面的 gzip_static，这里作为兜底（未生成 .gz 的资源仍可动态压缩）
+    # =========================================================================
+    gzip              on;
+    gzip_min_length   1024;
+    gzip_comp_level   6;
+    gzip_vary         on;
+    gzip_proxied      any;
+    gzip_types        text/plain
+                      text/css
+                      text/javascript
+                      application/javascript
+                      application/json
+                      application/xml
+                      image/svg+xml
+                      font/woff
+                      font/woff2;
+
+    # =========================================================================
+    # 6) 可选：Nginx 直接返回接口健康检查的探活（便于运维监控前端站点本身）
+    # =========================================================================
+    location = /healthz {
+        access_log off;
+        return 200 "frontend-ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    # =========================================================================
+    # 7) 可选：HTTPS（生产建议启用；证书可用自签或企业 CA）
+    #    启用后把上面的 listen 80 改为 301 跳转，并放开本段：
+    # =========================================================================
+    # server {
+    #     listen 443 ssl;
+    #     http2 on;
+    #     server_name mes.example.com;
+    #
+    #     ssl_certificate     /etc/nginx/ssl/mes.crt;
+    #     ssl_certificate_key /etc/nginx/ssl/mes.key;
+    #     ssl_protocols       TLSv1.2 TLSv1.3;
+    #     ssl_ciphers         HIGH:!aNULL:!MD5;
+    #     ssl_session_cache   shared:SSL:10m;
+    #     ssl_session_timeout 10m;
+    #
+    #     root  /opt/mes/frontend/dist;
+    #     index index.html;
+    #
+    #     location / { try_files $uri $uri/ /index.html; }
+    #     location = /index.html { add_header Cache-Control "no-cache, no-store, must-revalidate" always; expires -1; }
+    #     location /assets/ { expires 1y; add_header Cache-Control "public, max-age=31536000, immutable"; }
+    #     location /api/ {
+    #         proxy_pass http://127.0.0.1:3000;
+    #         proxy_set_header Host              $host;
+    #         proxy_set_header X-Real-IP         $remote_addr;
+    #         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    #         proxy_set_header X-Forwarded-Proto $scheme;
+    #     }
+    # }
+    #
+    # # 80 端口统一跳转到 HTTPS
+    # server {
+    #     listen 80;
+    #     server_name mes.example.com;
+    #     return 301 https://$host$request_uri;
+    # }
+}

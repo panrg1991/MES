@@ -1,0 +1,86 @@
+# =============================================================================
+# MES 后端 + MySQL 一键起服务（本文件位于 backend/deploy/，请在该目录执行）
+# -----------------------------------------------------------------------------
+# 启动：docker compose up -d --build
+# 查看：docker compose ps ; docker compose logs -f backend
+# 停止：docker compose down            （保留数据卷 mysql-data）
+# 清库：docker compose down -v         （删除数据卷，下次启动会重新执行 initdb 脚本）
+#
+# 关键约定：
+#   · mysql 服务首次启动时自动执行挂载的 database/mes-mysql-init.sql
+#     （27 张表 + 权限/角色/用户/车间/设备种子数据；脚本第一句就是 CREATE DATABASE mes_workshop）
+#   · backend 服务按 build.args.DB_TYPE 生成对应类型的 Prisma Client（prisma/generated/<类型>），
+#     运行时由 src/config/database.js 按 DB_TYPE 动态加载
+#   · 若想改用 SQLite：把 DB_TYPE 改为 sqlite、DB_PATH 改为 /data/prod.db，
+#     并把 mysql 服务整个删掉/注释掉（同时给 backend 挂载数据卷）
+#
+# 安全提示：示例口令仅用于本地/内网演示，生产请改强口令并用 secrets 管理。
+# =============================================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mes-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --lower_case_table_names=0
+    environment:
+      MYSQL_ROOT_PASSWORD: CHANGE_ME_ROOT_PASSWORD
+      MYSQL_DATABASE: mes_workshop
+      MYSQL_USER: mes_user
+      MYSQL_PASSWORD: CHANGE_ME_APP_PASSWORD
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # initdb：容器首次初始化（数据卷为空）时自动执行；已含种子数据
+      - ../../database/mes-mysql-init.sql:/docker-entrypoint-initdb.d/01-mes-mysql-init.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-pCHANGE_ME_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  backend:
+    build:
+      # context 必须指向 backend/（本文件在 deploy/ 子目录里）
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        # 镜像内预生成哪种 Prisma Client：sqlite | mysql
+        DB_TYPE: mysql
+    image: mes-backend:1.0.0-mysql
+    container_name: mes-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # 数据库动态配置：改 DB_TYPE 即可切库（sqlite | mysql）
+      DB_TYPE: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: mes_user
+      DB_PASSWORD: CHANGE_ME_APP_PASSWORD
+      DB_NAME: mes_workshop
+      JWT_SECRET: CHANGE_ME_STRONG_RANDOM_SECRET
+      JWT_EXPIRES_IN: 2h
+      JWT_REFRESH_SECRET: CHANGE_ME_STRONG_RANDOM_REFRESH_SECRET
+      JWT_REFRESH_EXPIRES_IN: 7d
+      # 允许的前端来源（多个用逗号分隔；容器部署一般由 Nginx 同源代理，可填实际域名）
+      CORS_ORIGIN: http://localhost:5173
+      BODY_LIMIT: 10
+      TZ: Asia/Shanghai
+    ports:
+      - "3000:3000"
+
+volumes:
+  mysql-data:
+    name: mes-mysql-data

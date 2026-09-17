@@ -1,0 +1,108 @@
+# =============================================================================
+# MES 车间制造执行系统 - 持续集成
+# -----------------------------------------------------------------------------
+# 触发：推送到主干分支、所有 Pull Request、以及手工触发
+#
+# 两个 Job 相互独立，可并行执行，体现「前后端双代码库」的交付形态：
+#   · backend  ：静态检查 + 单元/集成测试（使用 SQLite，无需外部服务）
+#   · frontend ：静态检查 + 类型检查与生产构建 + 单元/组件测试
+#
+# 数据库说明：CI 中统一使用 SQLite（零依赖）。
+#   MySQL 分支的编译产物（Prisma Client）由 db:setup:all 一并生成，
+#   测试用例会断言「双 Client 预生成」这一动态切换的前提条件。
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+# 同一分支的重复推送只保留最新一次运行
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================ 后端 ============================
+  backend:
+    name: 后端 · 静态检查与测试
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 准备数据库（生成 SQLite + MySQL 两套 Prisma Client）
+        run: npm run db:setup:all
+
+      - name: 静态检查（ESLint）
+        run: npm run lint
+
+      - name: 运行测试（单元 + 集成）
+        run: npm test
+
+      - name: 上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-report
+          path: backend/coverage/
+          if-no-files-found: ignore
+
+  # ============================ 前端 ============================
+  frontend:
+    name: 前端 · 静态检查、构建与测试
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 静态检查（ESLint）
+        run: npm run lint
+
+      - name: 类型检查与生产构建
+        run: npm run build
+
+      - name: 运行测试（单元 + 组件）
+        run: npm test
+
+      - name: 上传构建产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: ignore

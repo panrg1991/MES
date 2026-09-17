@@ -1,0 +1,568 @@
+// =====================================================
+// MES 车间制造执行系统 - Prisma 数据模型定义
+// 数据库：SQLite（开发）→ MySQL 8.0（生产，切换 datasource provider 并添加 @db.VarChar 即可）
+// 共 27 张表，覆盖 P0（MVP）+ P1（第一迭代）
+// 设计原则：预留 workshopId 支持多车间扩展；所有表包含 createdAt / updatedAt 审计字段
+// 级联策略：删除用户 → SetNull（保留业务数据）；删除工单 → Cascade（级联删除报工记录）
+// =====================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// 1. 系统设置模块（P0）
+// =====================================================
+
+/// 用户账号表
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique // 登录账号（最长 50 字符）
+  passwordHash String   // bcrypt 哈希密码
+  name         String   // 用户姓名
+  department   String   // 所属部门
+  status       Boolean  @default(true) // 启用/停用
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // 关联关系（删除用户时关联引用设为 SetNull，保留业务数据）
+  userRoles          UserRole[]
+  productionReports  ProductionReport[]   @relation("OperatorReports")
+  workOrderLogs      WorkOrderStatusLog[] @relation("OperatorLogs")
+  equipmentLogs      EquipmentStatusLog[]
+  inspections        QualityInspection[]
+  defectHandlers     DefectRecord[]       @relation("DefectHandler")
+  inventoryTrans     InventoryTransaction[] @relation("OperatorTrans")
+  personnelSchedules PersonnelSchedule[]
+  workHoursRecords    WorkHoursRecord[]
+  maintenanceRecords  MaintenanceRecord[] @relation("Maintainer")
+  breakdownRepairs    BreakdownRecord[]    @relation("Repairer")
+
+  @@map("users")
+}
+
+/// 角色定义表
+model Role {
+  id          Int      @id @default(autoincrement())
+  name        String   // 角色名称
+  code        String   @unique // 角色编码
+  description String   // 角色描述
+  status      Boolean  @default(true) // 启用/停用
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+/// 权限表（菜单/按钮）
+model Permission {
+  id       Int    @id @default(autoincrement())
+  name     String // 权限名称
+  code     String @unique // 权限编码（格式：module:action）
+  type     String // 权限类型：menu | button
+  parentId Int?   // 父权限 ID（用于构建权限树）
+  path     String // 前端路由路径
+  sort     Int    @default(0) // 排序序号
+
+  // 关联关系
+  parent           Permission?     @relation("PermissionTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children         Permission[]    @relation("PermissionTree")
+  rolePermissions  RolePermission[]
+
+  @@map("permissions")
+}
+
+/// 用户-角色关联表（多对多）
+model UserRole {
+  userId Int
+  roleId Int
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+/// 角色-权限关联表（多对多）
+model RolePermission {
+  roleId       Int
+  permissionId Int
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// 车间表（预留多车间扩展，MVP 默认单车间）
+model Workshop {
+  id          Int      @id @default(autoincrement())
+  name        String   // 车间名称
+  code        String   @unique // 车间编码
+  description String   // 车间描述
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  workOrders WorkOrder[]
+  equipment   Equipment[]
+
+  @@map("workshops")
+}
+
+// =====================================================
+// 2. 生产管理模块（P0）
+// =====================================================
+
+/// 生产工单表
+model WorkOrder {
+  id           Int      @id @default(autoincrement())
+  orderNo      String   @unique // 工单编号
+  productName  String   // 产品名称
+  productCode  String   // 产品编码
+  quantity     Int      // 计划数量
+  completedQty Int      @default(0) // 已完成数量
+  defectQty    Int      @default(0) // 不良数量
+  status       String   @default("pending") // pending | in_progress | paused | completed | closed
+  workshopId   Int?     // 所属车间 ID
+  priority     String   @default("medium") // low | medium | high | urgent
+  planStart    DateTime? // 计划开始时间
+  planEnd      DateTime? // 计划结束时间
+  actualStart  DateTime? // 实际开始时间
+  actualEnd    DateTime? // 实际结束时间
+  remark       String   @default("") // 备注
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // 关联关系（删除工单时级联删除关联业务数据）
+  workshop    Workshop?             @relation(fields: [workshopId], references: [id], onDelete: SetNull)
+  reports     ProductionReport[]
+  statusLogs  WorkOrderStatusLog[]
+  inspections QualityInspection[]
+  defects     DefectRecord[]
+  workHours   WorkHoursRecord[]
+  schedules   ProductionSchedule[]
+
+  @@map("work_orders")
+}
+
+/// 报工记录表
+model ProductionReport {
+  id           Int      @id @default(autoincrement())
+  workOrderId  Int
+  completedQty Int      // 本次完成数量
+  defectQty    Int      @default(0) // 本次不良数量
+  operatorId   Int?     // 报工操作员 ID
+  reportTime   DateTime @default(now()) // 报工时间
+  remark       String   @default("") // 备注
+
+  // 关联关系
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  operator  User?     @relation("OperatorReports", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  @@map("production_reports")
+}
+
+/// 工单状态流转日志表
+model WorkOrderStatusLog {
+  id          Int      @id @default(autoincrement())
+  workOrderId Int
+  fromStatus   String   // 变更前状态
+  toStatus     String   // 变更后状态
+  operatorId  Int?     // 操作人 ID
+  changedAt   DateTime @default(now()) // 变更时间
+  remark      String   @default("") // 备注
+
+  // 关联关系
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  operator  User?     @relation("OperatorLogs", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  @@map("work_order_status_logs")
+}
+
+/// 生产排程表（P1）
+model ProductionSchedule {
+  id           Int       @id @default(autoincrement())
+  workOrderId  Int
+  equipmentId  Int?
+  plannedStart DateTime  // 计划开始时间
+  plannedEnd   DateTime  // 计划结束时间
+  actualStart  DateTime? // 实际开始时间
+  actualEnd    DateTime? // 实际结束时间
+  status       String    @default("planned") // planned | in_progress | completed | cancelled
+  createdAt    DateTime  @default(now()) // 【P1 新增】审计字段
+  updatedAt    DateTime  @updatedAt // 【P1 新增】审计字段
+
+  // 关联关系
+  workOrder WorkOrder  @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  equipment Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  // 【P1 新增】覆盖「同设备时段重叠」冲突检测查询的复合索引
+  @@index([equipmentId, plannedStart, plannedEnd])
+  @@map("production_schedules")
+}
+
+// =====================================================
+// 3. 设备管理模块（P0 + P1）
+// =====================================================
+
+/// 设备台账表
+model Equipment {
+  id           Int       @id @default(autoincrement())
+  code         String    @unique // 设备编码
+  name         String    // 设备名称
+  type         String    // 设备类型（车床/铣床/注塑机等）
+  location     String    // 设备位置
+  status       String    @default("idle") // running | idle | stopped | fault
+  workshopId   Int?      // 所属车间 ID
+  manufacturer String    // 制造商
+  model        String    // 设备型号
+  purchaseDate DateTime? // 购买日期
+  remark       String    @default("") // 备注
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // 关联关系
+  workshop          Workshop?            @relation(fields: [workshopId], references: [id], onDelete: SetNull)
+  statusLogs        EquipmentStatusLog[]
+  maintenancePlans  MaintenancePlan[]
+  maintenanceRecords MaintenanceRecord[]
+  breakdownRecords   BreakdownRecord[]
+  defectRecords     DefectRecord[]
+  schedules         ProductionSchedule[]
+
+  @@map("equipment")
+}
+
+/// 设备状态变更日志表
+model EquipmentStatusLog {
+  id          Int      @id @default(autoincrement())
+  equipmentId Int
+  oldStatus   String   // 变更前状态
+  newStatus   String   // 变更后状态
+  changedById Int?     // 操作人 ID（标量外键字段）
+  changedAt   DateTime @default(now()) // 变更时间
+  remark      String   @default("") // 备注
+
+  // 关联关系
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  changedBy User?     @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@map("equipment_status_logs")
+}
+
+/// 维保计划表（P1）
+model MaintenancePlan {
+  id          Int      @id @default(autoincrement())
+  equipmentId Int
+  planName    String   // 维保计划名称
+  cycleType   String   // 维保周期类型：daily | weekly | monthly | quarterly | yearly
+  cycleDays   Int      // 维保周期天数
+  nextDate    DateTime // 下次维保日期
+  status      String   @default("active") // active | inactive
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  equipment Equipment           @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  records   MaintenanceRecord[]
+
+  @@map("maintenance_plans")
+}
+
+/// 维保记录表（P1）
+model MaintenanceRecord {
+  id              Int       @id @default(autoincrement())
+  planId          Int? // 【P1 改】关联维保计划（可选，支持临时保养；为空时不顺延计划）
+  equipmentId     Int
+  maintenanceType String    // 维保类型：preventive | corrective | emergency
+  maintainerId    Int?      // 维保人员 ID
+  startTime       DateTime  // 维保开始时间
+  endTime         DateTime? // 维保结束时间
+  content         String    @default("") // 维保内容
+  createdAt       DateTime  @default(now()) // 【P1 新增】审计字段
+  updatedAt       DateTime  @updatedAt // 【P1 新增】审计字段
+
+  // 关联关系
+  // 【P1 改】planId 可选 + onDelete SetNull：删除计划保留保养历史（原 Cascade 会连带丢失记录）
+  plan       MaintenancePlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  equipment  Equipment        @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  maintainer User?            @relation("Maintainer", fields: [maintainerId], references: [id], onDelete: SetNull)
+
+  @@map("maintenance_records")
+}
+
+/// 故障维修记录表（P1）
+model BreakdownRecord {
+  id               Int       @id @default(autoincrement())
+  equipmentId      Int
+  faultType        String    // 故障类型
+  faultDescription String    @default("") // 故障描述
+  occurredAt       DateTime  // 故障发生时间
+  repairedAt       DateTime? // 修复时间
+  repairerId       Int?      // 维修人员 ID
+  repairMethod     String    @default("") // 维修方法
+  downtimeDuration Int       @default(0) // 故障停机时长（分钟）
+  createdAt        DateTime  @default(now()) // 【P1 新增】审计字段
+  updatedAt        DateTime  @updatedAt // 【P1 新增】审计字段
+
+  // 关联关系
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  repairer  User?     @relation("Repairer", fields: [repairerId], references: [id], onDelete: SetNull)
+
+  // 【P1 新增】设备维度故障历史查询索引
+  @@index([equipmentId, occurredAt])
+  @@map("breakdown_records")
+}
+
+// =====================================================
+// 4. 质量管理模块（P0）
+// =====================================================
+
+/// 质量检验记录表
+model QualityInspection {
+  id              Int      @id @default(autoincrement())
+  workOrderId     Int
+  inspectionType  String   // 检验类型：first_article | process | final
+  inspectorId     Int?     // 检验员 ID
+  inspectionTime  DateTime @default(now()) // 检验时间
+  result          String   // 检验结果：pass | fail | concession
+  remark          String   @default("") // 备注
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // 关联关系
+  workOrder  WorkOrder         @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  inspector  User?             @relation(fields: [inspectorId], references: [id], onDelete: SetNull)
+  items      InspectionItem[]
+
+  @@map("quality_inspections")
+}
+
+/// 检验项明细表
+model InspectionItem {
+  id            Int    @id @default(autoincrement())
+  inspectionId  Int
+  itemName      String // 检验项名称
+  standardValue String // 标准值
+  actualValue   String // 实际值
+  unit          String // 计量单位
+  result        String // 检验结果：pass | fail | concession
+  remark        String @default("") // 备注
+
+  // 关联关系
+  inspection QualityInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@map("inspection_items")
+}
+
+/// 不良品记录表
+model DefectRecord {
+  id              Int      @id @default(autoincrement())
+  workOrderId     Int
+  equipmentId     Int?     // 关联设备（可选）
+  defectType      String   // 不良类型
+  defectReason    String   @default("") // 不良原因
+  quantity        Int      // 不良数量
+  handlingMethod  String?  // 处理方式：rework | scrap | concession
+  handledBy       Int?     // 处理人 ID
+  handledAt       DateTime? // 处理时间
+  remark          String   @default("") // 备注
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // 关联关系
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  equipment Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  handler   User?     @relation("DefectHandler", fields: [handledBy], references: [id], onDelete: SetNull)
+
+  @@map("defect_records")
+}
+
+// =====================================================
+// 5. 物料管理模块（P0 + P1）
+// =====================================================
+
+/// 物料主数据表
+model Material {
+  id            Int      @id @default(autoincrement())
+  code          String   @unique // 物料编码
+  name          String   // 物料名称
+  specification String   // 规格
+  unit          String   // 计量单位
+  category      String   // 物料分类
+  type          String   // 物料类型：raw | semi | finished
+  description   String   @default("") // 描述
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // 关联关系
+  bomItems     BOMItem[]
+  inventory    Inventory?
+  transactions InventoryTransaction[]
+  batches      MaterialBatch[]
+
+  @@map("materials")
+}
+
+/// 物料清单（BOM）表
+model BOM {
+  id          Int      @id @default(autoincrement())
+  productCode String   // 产品编码
+  productName String   // 产品名称
+  version     String   // BOM 版本
+  status      Boolean  @default(true) // 启用/停用
+  remark      String   @default("") // 备注
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  items BOMItem[]
+
+  @@map("boms")
+}
+
+/// BOM 明细表
+model BOMItem {
+  id         Int    @id @default(autoincrement())
+  bomId      Int
+  materialId Int
+  quantity   Float  // 用量
+  unit       String // 计量单位
+  remark     String @default("") // 备注
+
+  // 关联关系
+  bom      BOM     @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@map("bom_items")
+}
+
+/// 库存表
+model Inventory {
+  id          Int      @id @default(autoincrement())
+  materialId  Int      @unique
+  warehouse   String   // 仓库
+  location    String   // 库位
+  quantity    Float    @default(0) // 当前库存量
+  safetyStock Float    @default(0) // 安全库存
+  maxStock    Float    @default(0) // 最大库存
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@map("inventory")
+}
+
+/// 出入库记录表
+model InventoryTransaction {
+  id              Int      @id @default(autoincrement())
+  materialId      Int
+  transactionType String   // 出入库类型：in | out
+  quantity        Float    // 出入库数量
+  batchNo         String   // 批次号
+  operatorId      Int?     // 操作员 ID
+  transactionTime DateTime @default(now()) // 出入库时间
+  relatedOrder    String   // 关联单据（工单号等）
+  remark          String   @default("") // 备注
+
+  // 关联关系
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  operator User?    @relation("OperatorTrans", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  // 【P1 新增】批次号索引（质量追溯 / 物料追溯链路高频查询）
+  @@index([batchNo])
+  @@map("inventory_transactions")
+}
+
+/// 物料批次表（P1）
+model MaterialBatch {
+  id           Int      @id @default(autoincrement())
+  materialId   Int
+  batchNo      String   // 批次号
+  supplier     String   // 供应商
+  receivedDate DateTime // 入库日期
+  quantity     Float    // 批次数量
+  status       String   @default("active") // active | consumed | expired
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // 关联关系
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@map("material_batches")
+}
+
+// =====================================================
+// 6. 人员管理模块（P1）
+// =====================================================
+
+/// 班次定义表
+model Shift {
+  id          Int      @id @default(autoincrement())
+  name        String   // 班次名称（如：早班、白班、夜班）
+  startTime   String   // 开始时间 HH:mm
+  endTime     String   // 结束时间 HH:mm
+  description String   @default("") // 班次描述
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联关系
+  personnelSchedules PersonnelSchedule[]
+  workHoursRecords    WorkHoursRecord[]
+
+  @@map("shifts")
+}
+
+/// 人员排班表
+model PersonnelSchedule {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  shiftId      Int
+  workStation  String   // 工位
+  scheduleDate DateTime // 排班日期
+  remark       String   @default("") // 备注
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // 关联关系
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  // 【P1 新增】同人 + 同日 + 同班次唯一约束（防重复排班，含并发窗口兜底）
+  @@unique([userId, scheduleDate, shiftId])
+  @@map("personnel_schedules")
+}
+
+/// 工时记录表
+model WorkHoursRecord {
+  id          Int       @id @default(autoincrement())
+  userId      Int?      // 操作员 ID
+  workOrderId Int
+  shiftId     Int?      // 班次 ID
+  workDate    DateTime  // 工作日期
+  startTime   DateTime  // 开始时间
+  endTime     DateTime? // 结束时间
+  hours       Float     @default(0) // 工时（小时）
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // 关联关系
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  shift     Shift?    @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@map("work_hours_records")
+}

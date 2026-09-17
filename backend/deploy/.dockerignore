@@ -1,0 +1,56 @@
+# =============================================================================
+# Docker 构建上下文排除规则（配合 backend/deploy/Dockerfile 使用）
+# 使用方式（在 backend/ 目录）：
+#   docker buildx build --ignore-file deploy/.dockerignore -f deploy/Dockerfile -t mes-backend:1.0.0 .
+# =============================================================================
+
+# 依赖与构建产物（镜像内会重新 npm ci / prisma generate）
+node_modules
+**/node_modules
+dist
+build
+out
+
+# 数据库文件与备份（镜像内不携带任何环境数据）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db-wal
+prisma/*.db-shm
+backups
+logs
+
+# 环境变量（镜像内通过 -e / compose environment 注入，绝不打包）
+.env
+.env.*.local
+.env.production
+
+# 日志与临时文件
+*.log
+.tmp-*
+*.tmp
+tmp
+
+# 编辑器与系统文件
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# 验收/探测脚本产物（保留 scripts/ 下的正式脚本）
+probe-result.txt
+regression-result.txt
+smoke-result.txt
+qa-spotcheck-result.txt
+t10-*-result.txt
+t10-*-devdb.txt
+t10-*-testdb.txt
+
+# 版本控制与文档（运行时不需要）
+.git
+.gitignore
+*.md

@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+  MES 车间制造执行系统 - 前端 IIS 站点配置示例（Windows 内网部署）
+  ============================================================================
+  适用场景：Windows Server + IIS 静态托管前端 dist 产物。
+
+  前置条件：
+    1. 已执行 `npm ci && npm run build`，得到 dist/ 目录
+    2. IIS 已安装以下功能（「服务器管理器 → 添加角色和功能 → Web 服务器(IIS)」）：
+       - 静态内容 (Static Content)
+       - URL 重写 (URL Rewrite) ← 需单独下载安装：https://www.iis.net/downloads/microsoft/url-rewrite
+       - （可选）HTTP 重定向、IIS 管理控制台
+    3. 将站点物理路径指向 dist 目录（例如 D:\mes\frontend\dist）
+
+  使用方式：
+    把本文件重命名为 web.config，放到 dist 目录下（与 index.html 同级），
+    然后 `iisreset` 或在 IIS 管理器中重启站点。
+
+  ⚠️ 与 Nginx 方案的关键差异：
+    IIS 自身不做 /api 反向代理，需要额外安装 ARR（Application Request Routing）并
+    开启代理，见文件末尾「可选：ARR 反向代理」段。若内网已有 Nginx 承担 /api 转发，
+    可只让 IIS 托管静态资源，API 交给 Nginx（此时前端 .env.production 的
+    VITE_API_BASE_URL 需指向 Nginx 的同源 /api 或后端绝对地址，改完必须重新 build）。
+  ============================================================================
+-->
+<configuration>
+
+  <system.webServer>
+
+    <!-- ======================================================================
+         1) 默认文档：访问站点根路径时返回 index.html
+         ====================================================================== -->
+    <defaultDocument>
+      <files>
+        <clear />
+        <add value="index.html" />
+      </files>
+    </defaultDocument>
+
+    <!-- ======================================================================
+         2) 静态文件类型（IIS 默认已含大部分；此处补 .gz 便于预压缩文件被识别）
+         ====================================================================== -->
+    <staticContent>
+      <remove fileExtension=".json" />
+      <mimeMap fileExtension=".json" mimeType="application/json" />
+      <remove fileExtension=".gz" />
+      <mimeMap fileExtension=".gz" mimeType="application/gzip" />
+      <remove fileExtension=".woff" />
+      <mimeMap fileExtension=".woff" mimeType="font/woff" />
+      <remove fileExtension=".woff2" />
+      <mimeMap fileExtension=".woff2" mimeType="font/woff2" />
+      <remove fileExtension=".svg" />
+      <mimeMap fileExtension=".svg" mimeType="image/svg+xml" />
+      <!-- 客户端缓存设置：带内容哈希的 assets 长期缓存由下方 <location> 段控制 -->
+      <clientCache cacheControlMode="UseMaxAge" cacheControlMaxAge="7.00:00:00" />
+    </staticContent>
+
+    <!-- ======================================================================
+         3) 【关键】SPA History 路由回退（URL Rewrite 规则）
+            前端使用 React Router 6 history 模式，形如 /equipment/list、/reports/oee
+            的地址在磁盘上没有对应文件。若不做回退，用户在这些子页面按 F5 会 404。
+            规则含义：只有当请求既不是「磁盘上存在的文件」也不是「磁盘上存在的目录」
+                     时，才重写到 /index.html，交由前端路由处理。
+         ====================================================================== -->
+    <rewrite>
+      <rules>
+        <!-- 3.1 排除 /api 请求，避免把接口请求误回退成 index.html（后端由 ARR 或 Nginx 处理） -->
+        <rule name="ExcludeApi" stopProcessing="true">
+          <match url="^api/.*" />
+          <action type="None" />
+        </rule>
+
+        <!-- 3.2 SPA 回退：非文件、非目录 → index.html -->
+        <rule name="SPA History Fallback" stopProcessing="true">
+          <match url=".*" />
+          <conditions logicalGrouping="MatchAll">
+            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+            <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+          </conditions>
+          <action type="Rewrite" url="/index.html" />
+        </rule>
+      </rules>
+    </rewrite>
+
+    <!-- ======================================================================
+         4) 缓存策略
+            - assets/ 下文件名带内容哈希 → 长期强缓存（1 年）
+            - index.html 绝不能缓存，否则用户会加载到已失效的旧哈希资源 → 白屏
+         ====================================================================== -->
+    <httpProtocol>
+      <customHeaders>
+        <remove name="X-Powered-By" />
+        <!-- 站点级安全头（可选） -->
+        <add name="X-Content-Type-Options" value="nosniff" />
+        <add name="X-Frame-Options" value="SAMEORIGIN" />
+      </customHeaders>
+    </httpProtocol>
+
+    <!-- html / 无扩展名请求一律不缓存（保证拿到最新 index.html） -->
+    <urlCompression doStaticCompression="true" doDynamicCompression="true" />
+
+  </system.webServer>
+
+  <!-- ========================================================================
+       5) assets 目录长期缓存；index.html 禁止缓存（覆盖上面的默认 clientCache）
+       ======================================================================== -->
+  <location path="assets">
+    <system.webServer>
+      <staticContent>
+        <clientCache cacheControlMode="UseMaxAge" cacheControlMaxAge="365.00:00:00" />
+      </staticContent>
+    </system.webServer>
+  </location>
+
+  <location path="index.html">
+    <system.webServer>
+      <staticContent>
+        <clientCache cacheControlMode="DisableCache" />
+      </staticContent>
+      <httpProtocol>
+        <customHeaders>
+          <add name="Cache-Control" value="no-cache, no-store, must-revalidate" />
+          <add name="Pragma" value="no-cache" />
+        </customHeaders>
+      </httpProtocol>
+    </system.webServer>
+  </location>
+
+  <!-- ========================================================================
+       可选：ARR 反向代理（让 IIS 同时承担 /api → 127.0.0.1:3000）
+       启用条件：
+         1. 已安装 Application Request Routing (ARR) 3.0
+         2. IIS 管理器 → 服务器节点 → Application Request Routing Cache →
+            Server Proxy Settings → 勾选 "Enable proxy"
+       然后在下面放开 serverVariables 与 rewrite 规则即可：
+       ⚠️ 注意保留 /api 前缀（后端所有路由都挂在 /api 下），不要把前缀剥掉。
+       ======================================================================== -->
+  <!--
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name="ProxyApiToBackend" stopProcessing="true">
+          <match url="^api/(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:3000/api/{R:1}" />
+        </rule>
+      </rules>
+    </rewrite>
+    <proxy preserveHostHeader="true" />
+  </system.webServer>
+  -->
+
+</configuration>
