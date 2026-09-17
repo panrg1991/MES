@@ -312,7 +312,7 @@ function RoleManagement() {
         confirmLoading={createMutation.isPending || updateMutation.isPending}
         okText="保存"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
         width={480}
       >
         <Form<RoleFormData> form={form} layout="vertical">

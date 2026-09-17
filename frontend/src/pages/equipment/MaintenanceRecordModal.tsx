@@ -170,7 +170,7 @@ function MaintenanceRecordModal({
       okButtonProps={{ disabled: !canSubmit }}
       okText="登记"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={560}
     >
       <Form<MaintenanceRecordFormData> form={form} layout="vertical">

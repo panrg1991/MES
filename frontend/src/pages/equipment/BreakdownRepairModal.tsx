@@ -106,7 +106,7 @@ function BreakdownRepairModal({
       okButtonProps={{ disabled: !canSubmit }}
       okText="确认复机"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={560}
     >
       {record && (

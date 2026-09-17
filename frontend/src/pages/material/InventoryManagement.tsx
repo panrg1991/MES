@@ -149,7 +149,7 @@ function TransactionModal({
       okButtonProps={{ disabled: !canOperate }}
       okText="确认"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={520}
     >
       {inventory && (

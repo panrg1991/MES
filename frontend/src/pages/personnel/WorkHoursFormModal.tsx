@@ -121,7 +121,7 @@ function WorkHoursFormModal({
         void handleOk();
       }}
       onCancel={onClose}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item name="userId" label="人员（可选）">

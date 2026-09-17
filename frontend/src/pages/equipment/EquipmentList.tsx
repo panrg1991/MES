@@ -138,7 +138,7 @@ function StatusChangeModal({
       okButtonProps={{ disabled: !hasPermission('equipment:list:status') }}
       okText="确认"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={450}
     >
       <Form<StatusChangeFormData> form={form} layout="vertical">
@@ -276,7 +276,7 @@ function EquipmentForm({
       okButtonProps={{ disabled: !canEdit }}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={600}
     >
       <Form<EquipmentFormData>

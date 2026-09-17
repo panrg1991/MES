@@ -145,7 +145,7 @@ function MaterialForm({
       okButtonProps={{ disabled: !canEdit }}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={600}
     >
       <Form<MaterialFormData>

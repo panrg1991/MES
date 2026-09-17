@@ -73,7 +73,7 @@ function ProductionReport({
       okButtonProps={{ disabled: !hasPermission('production:order:report') }}
       okText="提交"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={450}
     >
       <Form<ReportFormData> form={form} layout="vertical">

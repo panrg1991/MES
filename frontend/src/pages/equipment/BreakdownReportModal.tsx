@@ -99,7 +99,7 @@ function BreakdownReportModal({
       okButtonProps={{ disabled: !canSubmit }}
       okText="提交报修"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={520}
     >
       <Form<BreakdownReportFormData> form={form} layout="vertical">

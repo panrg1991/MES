@@ -144,7 +144,7 @@ function MaintenancePlanFormModal({
       okButtonProps={{ disabled: !canSubmit }}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={560}
     >
       <Form<MaintenancePlanFormData>

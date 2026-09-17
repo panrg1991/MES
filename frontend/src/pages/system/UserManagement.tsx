@@ -385,7 +385,7 @@ function UserManagement() {
         confirmLoading={createMutation.isPending || updateMutation.isPending}
         okText="保存"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
         width={480}
       >
         <Form<UserFormData>
@@ -458,7 +458,7 @@ function UserManagement() {
         confirmLoading={resetPasswordMutation.isPending}
         okText="确认重置"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
         width={400}
       >
         <Form form={resetForm} layout="vertical">

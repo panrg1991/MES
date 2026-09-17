@@ -87,7 +87,7 @@ function ShiftFormModal({ visible, editingShift, onClose, onSuccess }: ShiftForm
         void handleOk();
       }}
       onCancel={onClose}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item

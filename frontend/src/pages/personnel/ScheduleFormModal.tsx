@@ -111,7 +111,7 @@ function ScheduleFormModal({
         void handleOk();
       }}
       onCancel={onClose}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical">
         <Form.Item

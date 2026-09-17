@@ -126,7 +126,7 @@ function InspectionForm({ visible, onClose, onSuccess }: InspectionFormProps) {
       okButtonProps={{ disabled: !hasPermission('quality:inspection:create') }}
       okText="提交"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={800}
     >
       <Form<InspectionFormData>

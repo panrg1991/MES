@@ -185,7 +185,7 @@ function DefectForm({
         }}
         okText="提交"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
         width={550}
       >
         <Form<CreateFormData> form={createForm} layout="vertical">
@@ -279,7 +279,7 @@ function DefectForm({
       }}
       okText="确认处理"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={500}
     >
       {defect && (

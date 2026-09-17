@@ -154,7 +154,7 @@ function RolePermissionAssign({
       okText="保存"
       cancelText="取消"
       width={600}
-      destroyOnClose
+      destroyOnHidden
     >
       <Spin spinning={loading}>
         <Tree

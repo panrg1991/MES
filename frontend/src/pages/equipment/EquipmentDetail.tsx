@@ -521,7 +521,7 @@ function EquipmentDetail() {
         }}
         okText="确认"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
         width={450}
       >
         <Form<StatusChangeFormData>

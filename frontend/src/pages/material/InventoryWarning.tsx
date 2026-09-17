@@ -118,7 +118,7 @@ function ReplenishModal({ visible, target, onClose }: ReplenishModalProps) {
       okText="确认入库"
       cancelText="取消"
       okButtonProps={{ disabled: !canOperate }}
-      destroyOnClose
+      destroyOnHidden
       width={520}
     >
       {target && (

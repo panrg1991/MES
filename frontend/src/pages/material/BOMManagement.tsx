@@ -171,7 +171,7 @@ function BOMForm({
       okButtonProps={{ disabled: !canEdit }}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={800}
     >
       <Form<BOMFormData>

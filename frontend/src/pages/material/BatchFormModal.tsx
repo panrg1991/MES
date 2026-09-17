@@ -144,7 +144,7 @@ function BatchFormModal({ visible, editing, onClose, onSuccess }: BatchFormModal
       confirmLoading={mutation.isPending}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={560}
     >
       <Form<BatchFormData> form={form} layout="vertical">
