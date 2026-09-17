@@ -270,6 +270,13 @@ function WorkOrderList() {
       render: (value: string | null) => formatDateTime(value),
     },
     {
+      title: '计划结束',
+      dataIndex: 'planEnd',
+      key: 'planEnd',
+      width: 170,
+      render: (value: string | null) => formatDateTime(value),
+    },
+    {
       title: '操作',
       key: 'action',
       width: 200,
@@ -381,7 +388,7 @@ function WorkOrderList() {
           pageSizeOptions: PAGE_SIZE_OPTIONS,
           onChange: handlePageChange,
         }}
-        scroll={{ x: 1200 }}
+        scroll={{ x: 1460 }}
       />
 
       <WorkOrderForm

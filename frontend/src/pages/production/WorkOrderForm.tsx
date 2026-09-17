@@ -122,7 +122,7 @@ function WorkOrderForm({
       okButtonProps={{ disabled: !canEdit }}
       okText="保存"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       width={600}
     >
       <Form<WorkOrderFormData>
@@ -178,15 +178,40 @@ function WorkOrderForm({
 
         <Form.Item label="计划开始时间" name="planStart">
           <DatePicker
-            showTime
+            // needConfirm=false：选中即生效，无需再点面板内的「确定」，
+            // 避免用户选完直接点弹窗「保存」时选择被静默丢弃
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            // 显式指定 format：输入框完整展示「日期 时间」，让已选值可见
+            format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }}
             placeholder="选择计划开始时间"
           />
         </Form.Item>
 
-        <Form.Item label="计划结束时间" name="planEnd">
+        <Form.Item
+          label="计划结束时间"
+          name="planEnd"
+          dependencies={['planStart']}
+          rules={[
+            ({ getFieldValue }) => ({
+              validator(_, value: Dayjs | undefined) {
+                const start = getFieldValue('planStart') as Dayjs | undefined;
+                // 两个时间均为可选项，仅在都填写时校验先后关系
+                if (!value || !start || value.isAfter(start)) {
+                  return Promise.resolve();
+                }
+                return Promise.reject(
+                  new Error('计划结束时间必须晚于计划开始时间'),
+                );
+              },
+            }),
+          ]}
+        >
           <DatePicker
-            showTime
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }}
             placeholder="选择计划结束时间"
           />
