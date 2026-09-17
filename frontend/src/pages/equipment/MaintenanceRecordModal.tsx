@@ -225,7 +225,12 @@ function MaintenanceRecordModal({
           name="startTime"
           rules={[{ required: true, message: '请选择维保开始时间' }]}
         >
-          <DatePicker showTime style={{ width: '100%' }} />
+          <DatePicker
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
+            style={{ width: '100%' }}
+          />
         </Form.Item>
 
         <Form.Item
@@ -246,7 +251,9 @@ function MaintenanceRecordModal({
           ]}
         >
           <DatePicker
-            showTime
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }}
             placeholder="选择结束时间（进行中可留空）"
           />

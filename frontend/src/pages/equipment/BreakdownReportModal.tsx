@@ -140,7 +140,12 @@ function BreakdownReportModal({
           name="occurredAt"
           rules={[{ required: true, message: '请选择故障发生时间' }]}
         >
-          <DatePicker showTime style={{ width: '100%' }} />
+          <DatePicker
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
+            style={{ width: '100%' }}
+          />
         </Form.Item>
       </Form>
     </Modal>

@@ -173,10 +173,20 @@ function WorkHoursFormModal({
           label="开始时间"
           rules={[{ required: true, message: '请选择开始时间' }]}
         >
-          <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
+          <DatePicker
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
+            style={{ width: '100%' }}
+          />
         </Form.Item>
         <Form.Item name="endTime" label="结束时间（可选，为空表示进行中）">
-          <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
+          <DatePicker
+            needConfirm={false}
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
+            style={{ width: '100%' }}
+          />
         </Form.Item>
         <div style={{ color: '#8c8c8c', fontSize: 12 }}>
           提示：工时由服务端自动计算（保留 2 位小数）；跨夜（如 20:00 → 04:00）按次日计算记 8 小时；

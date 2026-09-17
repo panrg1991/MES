@@ -120,6 +120,7 @@ function ScheduleFormModal({ visible, onClose, onSuccess }: ScheduleFormModalPro
           rules={[{ required: true, message: '请选择计划开始时间' }]}
         >
           <DatePicker
+            needConfirm={false}
             showTime={{ format: 'HH:mm' }}
             format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }}
@@ -143,6 +144,7 @@ function ScheduleFormModal({ visible, onClose, onSuccess }: ScheduleFormModalPro
           ]}
         >
           <DatePicker
+            needConfirm={false}
             showTime={{ format: 'HH:mm' }}
             format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }}
