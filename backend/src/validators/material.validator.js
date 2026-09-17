@@ -164,6 +164,16 @@ const inventoryWarningQuerySchema = z.object({
   level: optionalQueryEnum(['critical', 'warning']),
 });
 
+/**
+ * 出入库流水分页查询 Schema
+ * 补全分页默认值：该路由此前未挂载 query 校验，不传 page/pageSize 时
+ * service 里 skip 会算成 NaN，触发 Prisma「Argument `skip` is missing」500
+ */
+const transactionQuerySchema = z.object({
+  ...paginationQuery(),
+  materialId: optionalQueryId(),
+});
+
 /** 创建批次 Schema（P1-07） */
 const createBatchSchema = z.object({
   materialId: z
@@ -235,6 +245,7 @@ module.exports = {
   updateBOMSchema,
   bomQuerySchema,
   createTransactionSchema,
+  transactionQuerySchema,
   inventoryQuerySchema,
   inventoryWarningQuerySchema,
   createBatchSchema,

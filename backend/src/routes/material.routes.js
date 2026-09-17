@@ -16,6 +16,7 @@ const {
   updateBOMSchema,
   bomQuerySchema,
   createTransactionSchema,
+  transactionQuerySchema,
   inventoryQuerySchema,
   inventoryWarningQuerySchema,
   createBatchSchema,
@@ -179,6 +180,7 @@ router.get(
 router.get(
   '/inventory/transactions',
   requirePermission('material:inventory:view'),
+  validate({ query: transactionQuerySchema }),
   materialController.getTransactions,
 );
 
