@@ -16,7 +16,8 @@
 - [7. 验证与排障](#7-验证与排障)
 - [8. 备份与恢复](#8-备份与恢复)
 - [9. 模型变更与迁移策略](#9-模型变更与迁移策略)
-- [10. 常见问题 FAQ](#10-常见问题-faq)
+- [10. 数量与工时字段的精度约定（Decimal）](#10-数量与工时字段的精度约定decimal)
+- [11. 常见问题 FAQ](#11-常见问题-faq)
 
 ---
 
@@ -366,7 +367,59 @@ npm run db:backup
 
 ---
 
-## 10. 常见问题 FAQ
+## 10. 数量与工时字段的精度约定（Decimal）
+
+数量与工时属于**业务关键数值**，浮点误差不可接受，因此统一使用定点小数。
+
+### 10.1 字段清单与落地类型
+
+| 表.字段 | schema 定义 | MySQL 落地 | SQLite 落地 |
+|---------|-------------|-----------|-------------|
+| `bom_items.quantity` | `Decimal @db.Decimal(12, 2)` | `DECIMAL(12,2)` | `DECIMAL` |
+| `inventory.quantity` / `safetyStock` / `maxStock` | 同上 | `DECIMAL(12,2)` | `DECIMAL` |
+| `inventory_transactions.quantity` | 同上 | `DECIMAL(12,2)` | `DECIMAL` |
+| `material_batches.quantity` | 同上 | `DECIMAL(12,2)` | `DECIMAL` |
+| `work_hours_records.hours` | 同上 | `DECIMAL(12,2)` | `DECIMAL` |
+
+> `schema.prisma` 是**唯一真源**。SQLite connector 不支持 `@db.*` 原生类型注解，
+> 因此 `scripts/db-setup.js` 在生成 SQLite 变体时会**自动剥离**该注解（MySQL 变体保留）。
+> 两边的 `database/mes-mysql-init.sql` 与此约定保持一致。
+
+### 10.2 代码层约定（重要）
+
+Prisma Client 对 `Decimal` 字段返回的是 **Decimal 对象**，而不是 number。
+若直接 `JSON.stringify` 会变成**字符串**（如 `"12.34"`），破坏前端「数值即 number」的契约
+（前端会调用 `value.toFixed(2)`、直接参与算术，拿到字符串会报错或产生拼接）。
+
+两条必须遵守的规则：
+
+1. **响应出口统一转换**：`src/utils/response.js` 提供 `toPlainNumber()`，
+   递归把 Decimal / BigInt 转成 number；`sendSuccess` / `sendCreated` / `sendPaginated`
+   已自动应用 —— **新增接口只要走统一响应封装即可，无需额外处理**。
+2. **参与算术前显式转 number**：service 内对 Decimal 字段做加减、比较时写 `Number(field)`。
+   已适配的位置：
+   - `personnel.service.js`：工时汇总累加与总计
+   - `report.service.js`：工时报表聚合
+   - `material.service.js`：库存充足性判断与提示文案
+
+### 10.3 一致性校验
+
+```bash
+node database/verify-mysql-init.js
+```
+
+该脚本会比对 `schema.prisma` 与 `mes-mysql-init.sql` 的：
+
+- 表数量 / 表名 / 字段名 / 字段数量
+- **全字段类型语义族**（227 项）
+- **全字段可空性**（227 项）
+- 唯一约束 / 索引 / 外键 / 种子数据 / 语法
+
+共 **932 项断言**。修改任何一侧的字段定义后，请执行一次以确保未发生漂移。
+
+---
+
+## 11. 常见问题 FAQ
 
 **Q1：切换 `DB_TYPE` 后需要重新 `npm install` 吗？**
 

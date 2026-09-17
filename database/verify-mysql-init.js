@@ -4,12 +4,13 @@
  * 用途：在无法直连 MySQL 服务端时，对 database/mes-mysql-init.sql 做静态校验，
  *       确保脚本「可直接导入 MySQL」：
  *   1. 与 backend/prisma/schema.prisma 逐表比对：表数量、表名、字段名、字段数量
- *   2. 外键校验：被引用的表/列必须存在，且必须在本表之前创建（依赖顺序正确）
- *   3. 约束校验：@unique / @@unique / @@index / @@id 是否在 DDL 中有对应定义
- *   4. INSERT 校验：列必须存在、VALUES 元组的列数必须与列清单数量一致
- *   5. 语法体检：反引号/单引号/括号配对、语句以分号结尾
- *   6. 种子数据数量校验（与 backend/prisma/seed.js 口径一致）
- *   7. 【可选】若环境中存在 node-sql-parser，则对每条语句做 MySQL 方言语法解析
+ *   2. 全字段比对：类型语义族（允许刻意存在的宽度差异）+ 可空性（严格）
+ *   3. 外键校验：被引用的表/列必须存在，且必须在本表之前创建（依赖顺序正确）
+ *   4. 约束校验：@unique / @@unique / @@index / @@id 是否在 DDL 中有对应定义
+ *   5. INSERT 校验：列必须存在、VALUES 元组的列数必须与列清单数量一致
+ *   6. 语法体检：反引号/单引号/括号配对、语句以分号结尾
+ *   7. 种子数据数量校验（与 backend/prisma/seed.js 口径一致）
+ *   8. 【可选】若环境中存在 node-sql-parser，则对每条语句做 MySQL 方言语法解析
  *
  * 执行：node database/verify-mysql-init.js
  * 退出码：0 = 全部通过；1 = 存在校验失败项
@@ -229,7 +230,15 @@ function parsePrismaSchema(text) {
       const [, fieldName, fieldType, isList, isOptional] = fieldMatch;
       if (!SCALAR_TYPES.has(fieldType)) return; // 关系字段（模型类型）不计入列
       if (isList) return; // 列表关系字段不计入列
-      scalars.push({ name: fieldName, type: fieldType, optional: Boolean(isOptional) });
+      // 原生类型注解（如 @db.Decimal(12, 2)）：用于校验 MySQL 侧的类型是否与 schema 对齐
+      const nativeMatch = line.match(/@db\.(\w+)(?:\(([^)]*)\))?/);
+      scalars.push({
+        name: fieldName,
+        type: fieldType,
+        optional: Boolean(isOptional),
+        nativeType: nativeMatch ? nativeMatch[1] : null,
+        nativeArgs: nativeMatch && nativeMatch[2] ? nativeMatch[2].replace(/\s/g, '') : null,
+      });
       if (line.includes('@unique')) uniqueFields.push(fieldName);
       if (line.includes('@id')) idFields.push(fieldName);
     });
@@ -372,6 +381,84 @@ typeExpectations.forEach(([table, column, expectedType]) => {
     '类型映射',
     `${table}.${column} 类型为 ${expectedType}（实际：${normalized.slice(0, 40)}）`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// 2.3.1 全字段「类型语义族 + 可空性」比对（覆盖全部字段，避免抽样盲区）
+//
+// 背景：早期版本只抽查 6 个字段的类型、且完全不校验可空性，
+//       曾导致「schema 为 NOT NULL、SQL 建成 NULL」的 5 处偏差长期未被发现。
+// 口径：类型只比语义族（整数/字符串/小数/时间/布尔/JSON），
+//       允许刻意存在的宽度差异（BIGINT vs INT、VARCHAR(100) vs VARCHAR(191)）；
+//       可空性则严格比对。
+// ---------------------------------------------------------------------------
+
+/**
+ * 判定 SQL 类型的语义族（宽度差异视为等价）
+ * @param {string} sqlType 类型文本
+ * @returns {string} 语义族标识
+ */
+function sqlTypeFamily(sqlType) {
+  const t = String(sqlType || '').toUpperCase();
+  if (/^TINYINT\(1\)$/.test(t)) return 'BOOLEAN';
+  if (/^(TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT)/.test(t)) return 'INTEGER';
+  if (/^(VARCHAR|CHAR|TEXT|TINYTEXT|MEDIUMTEXT|LONGTEXT)/.test(t)) return 'STRING';
+  if (/^(DECIMAL|NUMERIC)/.test(t)) return 'DECIMAL';
+  if (/^(FLOAT|DOUBLE|REAL)/.test(t)) return 'FLOAT';
+  if (/^(DATETIME|TIMESTAMP|DATE|TIME)/.test(t)) return 'DATETIME';
+  if (/^(JSON|BLOB)/.test(t)) return 'JSON';
+  return `OTHER(${t})`;
+}
+
+/**
+ * 由 Prisma 标量推导其期待的 SQL 语义族（优先采用 @db 原生注解）
+ * @param {object} scalar Prisma 标量字段
+ * @returns {string} 语义族标识
+ */
+function prismaFieldFamily(scalar) {
+  if (scalar.nativeType) {
+    return sqlTypeFamily(scalar.nativeType.toUpperCase());
+  }
+  const byPrismaType = {
+    Int: 'INTEGER',
+    BigInt: 'INTEGER',
+    String: 'STRING',
+    Boolean: 'BOOLEAN',
+    DateTime: 'DATETIME',
+    Float: 'FLOAT',
+    Decimal: 'DECIMAL',
+    Json: 'JSON',
+  };
+  return byPrismaType[scalar.type] || `UNKNOWN(${scalar.type})`;
+}
+
+Object.entries(prismaModels).forEach(([modelName, model]) => {
+  const ddl = ddlTables[model.table];
+  if (!ddl) return;
+
+  model.scalars.forEach((scalar) => {
+    const col = ddl.columns.find((c) => c.name === scalar.name);
+    if (!col) return;
+
+    const def = col.definition.replace(/\s+/g, ' ').trim().toUpperCase();
+    const typeMatch = def.match(/^`[^`]+`\s+([A-Za-z]+(?:\([^)]*\))?)/);
+    const actualType = typeMatch ? typeMatch[1] : '';
+
+    const expectedFamily = prismaFieldFamily(scalar);
+    const actualFamily = sqlTypeFamily(actualType);
+    check(
+      expectedFamily === actualFamily,
+      '类型比对',
+      `${model.table}.${scalar.name} 语义族 ${expectedFamily}（SQL：${actualType || '未识别'} → ${actualFamily}）`,
+    );
+
+    const ddlNullable = !/NOT NULL/.test(def);
+    check(
+      ddlNullable === Boolean(scalar.optional),
+      '可空性比对',
+      `${model.table}.${scalar.name} 可空性 schema=${scalar.optional ? 'NULL' : 'NOT NULL'} / SQL=${ddlNullable ? 'NULL' : 'NOT NULL'}`,
+    );
+  });
 });
 
 // 2.4 唯一约束 / 复合索引比对

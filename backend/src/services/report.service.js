@@ -767,7 +767,8 @@ async function getWorkHoursEfficiency(query) {
     if (!groups.has(key)) {
       groups.set(key, { userName: record.user?.name || '未指定人员', totalHours: 0 });
     }
-    groups.get(key).totalHours += record.hours;
+    // hours 为 Decimal 字段，需先转 number 再做累加
+    groups.get(key).totalHours += Number(record.hours);
   }
 
   for (const report of reports) {

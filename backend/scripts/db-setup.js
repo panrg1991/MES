@@ -159,7 +159,7 @@ function syncSchema(driver) {
 
   // 注意：Prisma 的 output 相对 schema 文件所在目录（prisma/），故此处直接写 generated/<driver>
   const output = path.posix.join('generated', driver);
-  const nextBody = body
+  let nextBody = body
     // 重写 generator：指向该库类型专属的输出目录
     .replace(
       /generator\s+client\s*\{[\s\S]*?\}/,
@@ -170,6 +170,12 @@ function syncSchema(driver) {
       /(datasource\s+\w+\s*\{[\s\S]*?provider\s*=\s*")[^"]+(")/,
       `$1${DRIVERS[driver].provider}$2`,
     );
+
+  // SQLite connector 不支持 MySQL / PostgreSQL 的原生类型注解（@db.Decimal、@db.VarChar 等），
+  // 主 schema 为对齐 MySQL 建库脚本而使用了 @db.Decimal(12,2)，此处为 SQLite 变体剥离该注解。
+  if (driver === 'sqlite') {
+    nextBody = nextBody.replace(/\s*@db\.[A-Za-z]+(\([^)]*\))?/g, '');
+  }
 
   const targetPath = path.join(
     BACKEND_DIR,

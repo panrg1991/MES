@@ -438,7 +438,7 @@ model BOMItem {
   id         Int    @id @default(autoincrement())
   bomId      Int
   materialId Int
-  quantity   Float  // 用量
+  quantity   Decimal @db.Decimal(12, 2) // 用量（定点小数：数量类字段统一用 Decimal(12,2) 保证精度）
   unit       String // 计量单位
   remark     String @default("") // 备注
 
@@ -455,9 +455,9 @@ model Inventory {
   materialId  Int      @unique
   warehouse   String   // 仓库
   location    String   // 库位
-  quantity    Float    @default(0) // 当前库存量
-  safetyStock Float    @default(0) // 安全库存
-  maxStock    Float    @default(0) // 最大库存
+  quantity    Decimal  @default(0) @db.Decimal(12, 2) // 当前库存量
+  safetyStock Decimal  @default(0) @db.Decimal(12, 2) // 安全库存
+  maxStock    Decimal  @default(0) @db.Decimal(12, 2) // 最大库存
   updatedAt   DateTime @updatedAt
 
   // 关联关系
@@ -471,7 +471,7 @@ model InventoryTransaction {
   id              Int      @id @default(autoincrement())
   materialId      Int
   transactionType String   // 出入库类型：in | out
-  quantity        Float    // 出入库数量
+  quantity        Decimal  @db.Decimal(12, 2) // 出入库数量
   batchNo         String   // 批次号
   operatorId      Int?     // 操作员 ID
   transactionTime DateTime @default(now()) // 出入库时间
@@ -494,7 +494,7 @@ model MaterialBatch {
   batchNo      String   // 批次号
   supplier     String   // 供应商
   receivedDate DateTime // 入库日期
-  quantity     Float    // 批次数量
+  quantity     Decimal  @db.Decimal(12, 2) // 批次数量
   status       String   @default("active") // active | consumed | expired
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -555,7 +555,7 @@ model WorkHoursRecord {
   workDate    DateTime  // 工作日期
   startTime   DateTime  // 开始时间
   endTime     DateTime? // 结束时间
-  hours       Float     @default(0) // 工时（小时）
+  hours       Decimal   @default(0) @db.Decimal(12, 2) // 工时（小时）
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

@@ -599,9 +599,9 @@ async function createTransaction(data, operatorId) {
 
   // 出库时检查库存是否充足
   if (data.transactionType === 'out') {
-    if (material.inventory.quantity < data.quantity) {
+    if (Number(material.inventory.quantity) < data.quantity) {
       const error = new Error(
-        `库存不足：当前库存 ${material.inventory.quantity}，需出库 ${data.quantity}`,
+        `库存不足：当前库存 ${Number(material.inventory.quantity)}，需出库 ${data.quantity}`,
       );
       error.statusCode = 400;
       throw error;

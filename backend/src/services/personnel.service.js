@@ -590,7 +590,8 @@ async function getWorkHoursSummary(query) {
       });
     }
     const group = groups.get(key);
-    group.totalHours = round2(group.totalHours + record.hours);
+    // hours 为 Decimal 字段，Prisma 返回 Decimal 对象，参与算术前需转为 number
+    group.totalHours = round2(group.totalHours + Number(record.hours));
     group.recordCount += 1;
     if (record.userId !== null) {
       group.userIds.add(record.userId);
@@ -630,7 +631,7 @@ async function getWorkHoursSummary(query) {
   // 按总工时倒序排列（排行优先展示工时最多的分组）
   list.sort((a, b) => b.totalHours - a.totalHours);
 
-  const totalHours = round2(records.reduce((sum, r) => sum + r.hours, 0));
+  const totalHours = round2(records.reduce((sum, r) => sum + Number(r.hours), 0));
   return { list, totalHours, recordCount: records.length };
 }
 

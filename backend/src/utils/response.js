@@ -2,7 +2,49 @@
  * MES 系统 - 统一响应封装
  * 所有 Controller 通过此模块返回标准化 JSON 响应
  * 响应格式：{ code, data, message, errors? }
+ *
+ * 【Decimal 序列化约定】
+ * schema 中数量、工时等字段使用 `Decimal @db.Decimal(12,2)` 以保证精度，
+ * 但 Prisma Client 返回的是 Decimal 对象，JSON.stringify 后会变成**字符串**（如 "12.34"），
+ * 破坏前端「数值即 number」的契约（前端会调用 .toFixed()、直接参与算术运算）。
+ * 因此所有成功响应在写出前统一递归转换：Decimal → number，BigInt → number。
  */
+
+/**
+ * 递归把 Prisma Decimal / BigInt 转成 JS number
+ * @param {unknown} value - 任意值（对象 / 数组 / 原始值）
+ * @returns {unknown} 转换后的值（Date 与普通对象结构保持不变）
+ */
+function toPlainNumber(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(toPlainNumber);
+  }
+  if (value instanceof Date) {
+    // 交给 JSON.stringify 处理为 ISO 字符串，保持原有契约
+    return value;
+  }
+  if (typeof value === 'object') {
+    // Prisma Decimal（decimal.js 实例）同时具备 toNumber 与 toFixed
+    if (
+      typeof value.toNumber === 'function' &&
+      typeof value.toFixed === 'function'
+    ) {
+      return value.toNumber();
+    }
+    const plain = {};
+    Object.keys(value).forEach((key) => {
+      plain[key] = toPlainNumber(value[key]);
+    });
+    return plain;
+  }
+  return value;
+}
 
 /**
  * 成功响应
@@ -15,7 +57,7 @@
 function sendSuccess(res, data = null, message = '操作成功', statusCode = 200) {
   return res.status(statusCode).json({
     code: statusCode,
-    data,
+    data: toPlainNumber(data),
     message,
   });
 }
@@ -45,7 +87,7 @@ function sendPaginated(res, list, total, page, pageSize, message = '查询成功
   return res.status(200).json({
     code: 200,
     data: {
-      list,
+      list: toPlainNumber(list),
       total,
       page: Number(page),
       pageSize: Number(pageSize),
@@ -138,4 +180,5 @@ module.exports = {
   sendNotFound,
   sendConflict,
   sendNotImplemented,
+  toPlainNumber,
 };

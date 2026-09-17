@@ -552,8 +552,16 @@ npm run test:coverage     # 生成覆盖率报告（coverage/）
 
 ```bash
 npm run db:status                        # 当前库类型 / 连接串 / Client 生成状态
-node ../database/verify-mysql-init.js    # MySQL 建库脚本静态自检（表数/外键/语法等）
+node ../database/verify-mysql-init.js    # MySQL 建库脚本静态自检（932 项断言）
 ```
+
+该脚本会把 `prisma/schema.prisma` 与 `database/mes-mysql-init.sql` 逐项比对：
+表 / 字段名 / 字段数量、**全字段类型语义族（227 项）**、**全字段可空性（227 项）**、
+唯一约束 / 索引 / 外键 / 种子数据 / 语法。**修改任一侧的字段定义后务必执行一次**，
+防止两条 MySQL 建库路径（导入 SQL 与 `db push`）发生漂移。
+
+> 数量与工时字段使用 `Decimal @db.Decimal(12, 2)` 保证精度，
+> 其代码层约定（Decimal → number 的转换规则）见 [docs/DATABASE.md](docs/DATABASE.md) 第 10 节。
 
 ### 11.3 代码风格检查
 
