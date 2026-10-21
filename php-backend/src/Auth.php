@@ -43,7 +43,26 @@ class Auth
     }
 
     /**
+     * 读取请求头中的 Bearer Token（不校验）
+     * @return string
+     */
+    public static function bearerToken()
+    {
+        $header = self::authorizationHeader();
+        if ($header === '') {
+            return '';
+        }
+        $parts = explode(' ', $header);
+        if (count($parts) !== 2 || strcasecmp($parts[0], 'Bearer') !== 0) {
+            return '';
+        }
+        return (string) $parts[1];
+    }
+
+    /**
      * 认证当前请求，返回用户信息
+     * 说明：Token 只用于确认身份，账号状态与权限以数据库为准，
+     *       从而保证「停用/删除账号、回收权限」即时生效。
      * @return array<string,mixed>
      * @throws HttpException 401
      */
@@ -70,14 +89,70 @@ class Auth
             throw new HttpException('认证令牌已过期或无效', 401);
         }
 
+        // 登出后进入吊销名单的 Token 立即失效（未携带 jti 的旧 Token 不受影响）
+        if (!empty($decoded['jti']) && is_string($decoded['jti'])
+            && TokenDenylist::has($decoded['jti'])) {
+            Http::log('auth_token_revoked', array(
+                'userId' => isset($decoded['userId']) ? (int) $decoded['userId'] : 0,
+                'method' => Http::method(),
+                'path' => Http::path(),
+            ));
+            throw new HttpException('认证令牌已失效，请重新登录', 401);
+        }
+
+        $userId = isset($decoded['userId']) ? (int) $decoded['userId'] : 0;
+        if ($userId <= 0) {
+            throw new HttpException('认证令牌已过期或无效', 401);
+        }
+
+        // 账号实时校验：停用 / 删除后旧 Token 不再可用
+        $row = Db::one('SELECT id, username, status FROM users WHERE id = ?', array($userId));
+        if ($row === null || !$row['status']) {
+            Http::log('auth_user_inactive', array(
+                'userId' => $userId,
+                'method' => Http::method(),
+                'path' => Http::path(),
+            ));
+            throw new HttpException('账号不存在或已停用，请重新登录', 401);
+        }
+
         self::$currentUser = array(
-            'userId' => isset($decoded['userId']) ? (int) $decoded['userId'] : 0,
-            'username' => isset($decoded['username']) ? $decoded['username'] : '',
-            'permissions' => isset($decoded['permissions']) && is_array($decoded['permissions'])
-                ? $decoded['permissions']
-                : array(),
+            'userId' => (int) $row['id'],
+            'username' => (string) $row['username'],
+            'permissions' => self::permissionsFor((int) $row['id']),
         );
         return self::$currentUser;
+    }
+
+    /**
+     * 解析 Token 载荷（仅验签与有效期，不校验账号状态）
+     * @param string $token 原始 Token
+     * @return array<string,mixed>|null
+     */
+    public static function tokenPayload($token)
+    {
+        if (!is_string($token) || $token === '') {
+            return null;
+        }
+        $decoded = Jwt::verify($token, (string) Config::get('JWT_SECRET', 'default-jwt-secret'));
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * 吊销一个 Access Token（登出）
+     * @param string $token 原始 Token
+     * @return bool 是否成功加入吊销名单
+     */
+    public static function revoke($token)
+    {
+        $decoded = self::tokenPayload($token);
+        if ($decoded === null) {
+            return false;
+        }
+        if (empty($decoded['jti']) || empty($decoded['exp'])) {
+            return false;
+        }
+        return TokenDenylist::add((string) $decoded['jti'], (int) $decoded['exp']);
     }
 
     /**

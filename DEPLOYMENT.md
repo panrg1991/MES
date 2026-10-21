@@ -79,8 +79,9 @@ php -v && php -m | findstr /i "pdo_mysql pdo_sqlite zip mbstring"   # 仅 PHP �
 ```
 mes-workshop-system/
 ├── backend/                 # 后端源码（含 prisma/schema*.prisma、scripts/、deploy/、ecosystem.config.js）
+├── php-backend/             # PHP 后端源码（可选，与 Node 二选一部署）
 ├── frontend/                # 前端源码（构建产物在服务器上生成）
-├── database/                # mes-mysql-init.sql（用 MySQL 时必需）+ verify-mysql-init.js
+├── database/                # mes-mysql-init.sql（用 MySQL 时必需）+ mes-mysql-grants.sql + verify-mysql-init.js
 ├── DEPLOYMENT.md            # 本文件
 └── .gitignore               # 可选
 ```
@@ -131,6 +132,12 @@ copy .env.example .env.production # 配置生产变量：NODE_ENV/DB_TYPE/DB_*/J
 # 建库（二选一）
 npx prisma migrate deploy                                  # A) SQLite：应用仓库内迁移
 mysql -u root -p < ../database/mes-mysql-init.sql          # B) MySQL：导入建库脚本（含种子）
+
+# B+) MySQL 账号分层（强烈建议，最小权限）
+#     运行账号 mes_app 只有 DML 权限；建库/迁移/备份使用 root 或 mes_migrate
+mysql -u root -p -e "CREATE USER IF NOT EXISTS 'mes_app'@'%' IDENTIFIED BY '<强口令>';"
+mysql -u root -p < ../database/mes-mysql-grants.sql
+#     随后把 .env.production 的 DB_USER 改为 mes_app、DB_PASSWORD 改为上面的强口令
 
 npm run db:seed                   # 种子数据（幂等；方式 B 已自带，可跳过）
 set NODE_ENV=production && npm start    # 先前台试跑，确认健康
@@ -226,8 +233,9 @@ PHP 后端位于 `php-backend/`，实现与 Node 后端**完全相同的 100+ �
 | PHP | ≥ 7.2（推荐 7.4 / 8.x），关闭 `display_errors`，开启 `pdo_mysql`（MySQL）或 `pdo_sqlite`（SQLite） |
 | 扩展 | `zip`（Excel 导出必需）、`mbstring`、`json`、`openssl` |
 | 数据库 | 已由 Node 侧执行过 `npm run db:setup:all`（PHP **不建表**，只读写同一个库） |
-| 配置 | `php-backend/.env`（可选）。未创建时自动读取 `backend/.env`，从而共用数据库与 JWT 密钥 |
-| 目录权限 | `php-backend/runtime/` 可写（限流、登录锁定、日志、启动时间） |
+| 配置 | **选文件规则与 Node 一致**：`NODE_ENV=production` 读 `.env.production`，其他读 `.env`；先找 `php-backend/`，再找 `backend/`。生产缺少 `.env.production` 时 PHP 返回 **503 拒绝启动**（防止连错库/用弱密钥） |
+| 账号权限 | 生产使用最小权限账号（仅 `SELECT/INSERT/UPDATE/DELETE`），建表/改表由迁移账号或 root 执行，见 `database/mes-mysql-grants.sql` |
+| 目录权限 | `php-backend/runtime/` 可写（限流、登录锁定、令牌吊销、日志、启动时间） |
 
 **方式 A：单机演示 / 内网小规模（PHP 内置服务器）**
 
@@ -308,12 +316,34 @@ switch-backend.bat node
 | 11 | 登录锁定 | 同一账号连续 5 次密码错误后返回 429（15 分钟后自动解锁） |
 | 12 | 回切验证 | `switch-backend.bat node` 后刷新页面，系统仍正常可用 |
 
+**生产配置（`php-backend/.env.production`）**
+
+```ini
+NODE_ENV=production              # 必须在系统环境变量/php-fpm env 中设置，决定读 .env.production
+APP_DEBUG=false                  # 生产保持 false，异常详情不回显
+TRUST_PROXY=true                 # Nginx/Apache 前置时必须为 true，否则限流与审计 IP 全是 127.0.0.1
+DB_TYPE=mysql
+DB_HOST=127.0.0.1
+DB_USER=mes_app                  # 最小权限账号（仅 DML）
+DB_PASSWORD=<强口令>
+DB_NAME=mes_workshop
+JWT_SECRET=<与 Node 端一致，≥32 位>
+JWT_REFRESH_SECRET=<与 Node 端一致，另一把 ≥32 位>
+CORS_ORIGIN=http://<前端实际地址>
+```
+
+> **启动自检（503 拒绝启动）**：生产环境（`NODE_ENV=production`）下若
+> ① 找不到 `.env.production`、② `NODE_ENV` 未明确为 production、③ JWT 密钥为默认值/占位值/短于 32 位/两把相同，
+> 后端会直接返回 `503 服务配置不安全：…` 并在 `runtime/app.log` 记录 `config_insecure`。
+> 这是刻意设计的 fail-fast：避免静默连到开发库或使用弱密钥上线。
+
 > PHP 后端注意事项：
-> 1. 登录锁定与限流使用 `php-backend/runtime/state.json`（文件锁），**多实例/多机部署需替换为 Redis 等集中存储**；
+> 1. 登录锁定与限流使用 `php-backend/runtime/state.json`（文件锁），令牌吊销名单使用 `runtime/denylist.json`，**多实例/多机部署需替换为 Redis 等集中存储**；
 > 2. PHP 不做数据库迁移，升级表结构仍由 Node 侧 Prisma 执行，执行后再启动 PHP 即可；
 > 3. PHP 端 `JWT_SECRET` 必须与 Node 端一致，否则切换后旧 Token 失效（重新登录即可）；
-> 4. 生产环境务必设置 `NODE_ENV=production`，避免异常细节回显到响应；
-> 5. 若使用 SQLite，请确保 Web 进程与 Node 进程不会同时长时间持有写事务（SQLite 单写者模型）。
+> 4. 鉴权以数据库为准：账号停用/删除、角色权限回收**立即生效**，无需等待 Token 过期；登出会把当前 Token 的 `jti` 加入吊销名单，剩余有效期内立即失效；
+> 5. 若使用 SQLite，请确保 Web 进程与 Node 进程不会同时长时间持有写事务（SQLite 单写者模型）；
+> 6. 数据库账号请使用 `database/mes-mysql-grants.sql` 收敛为 DML 权限，DDL 交给迁移账号/root。
 
 ---
 
@@ -324,14 +354,14 @@ switch-backend.bat node
 | 数据库 | 方式 | 命令 |
 |--------|------|------|
 | SQLite | 文件快照（脚本自动带时间戳） | `npm run db:backup`（→ `backend/backups/dev-YYYYMMDD-HHmmss.db`）或直接复制 `prisma/dev.db` |
-| MySQL | 逻辑备份 | `mysqldump --single-transaction --default-character-set=utf8mb4 -u mes_user -p mes_workshop > mes_workshop.sql`（或 `npm run db:backup -- --execute`） |
+| MySQL | 逻辑备份 | `mysqldump --single-transaction --default-character-set=utf8mb4 -u mes_migrate -p mes_workshop > mes_workshop.sql`（或 `npm run db:backup -- --execute`；备份用迁移账号/root，应用账号仅 DML） |
 
 建议：SQLite 每日定时 `npm run db:backup -- --keep=14`（任务计划/cron）；MySQL 每日全量 + binlog 增量；备份文件与代码分盘存放。
 
 ### 6.2 回滚
 
 ```bash
-# 1) 应用回滚（后端）
+# 1) 应用回滚（Node 后端）
 pm2 stop mes-backend
 #   切回上一版本代码（Git: git checkout <上一个 tag/commit> 或还原上一份发布包）
 npm ci --omit=dev && npm run db:setup
@@ -343,15 +373,47 @@ pm2 start ecosystem.config.js
 #    SQLite：停服务 → 用备份覆盖 prisma/dev.db → 启服务
 copy backups\dev-<时间戳>.db prisma\dev.db
 #    MySQL：
-mysql -u mes_user -p mes_workshop < mes_workshop-<时间戳>.sql
+mysql -u mes_app -p mes_workshop < mes_workshop-<时间戳>.sql
 ```
+
+**PHP 后端回滚（与 Node 二选一部署时）**
+
+```bash
+# ① 先回切前端（避免前端继续请求已下线的 PHP 地址）
+switch-backend.bat node
+
+# ② 停 PHP：Apache → 注释站点/Stop-Service Apache2.4；Nginx+FPM → nginx -s stop / 停 php-fpm
+#    临时演示（php -S）→ 结束对应 php 进程
+
+# ③ 回退代码：git checkout <上一个 tag/commit> 或还原上一份发布包（php-backend/ 整目录）
+
+# ④ 清理与核对（重要）
+#    · runtime/denylist.json 可保留（只影响已登出的 Token）；
+#    · runtime/state.json 建议删除：旧版本的登录锁定/限流计数会把账号继续锁住；
+#      del php-backend\runtime\state.json
+#    · 确认 php-backend/.env.production 仍在（不属于代码包，禁止随包回滚覆盖）
+
+# ⑤ 启 PHP → 访问 /api/health 确认 200、database.type 与实际库一致、service.node 为 PHP x.y.z
+
+# ⑥ 若本次发布包含表结构变更：PHP 不支持迁移，必须先按第 1 步把 Node 代码回滚到
+#    与旧表结构匹配的版本并恢复数据库备份，再启动 PHP（否则旧 PHP + 新表结构会 500）
+```
+
+> **回滚判定依据**：`/api/health` 的 `service.version` 两套后端都取 `backend/package.json`，
+> 无法区分 PHP 代码版本。回滚后请以「发布包/Git tag + 进程启动时间 + `/api/health` 的 `service.node`」共同确认，
+> 并在发布记录中登记每个版本的 Git commit。
 
 ### 6.3 注意事项
 
 1. **结构变更与数据回滚要成对**：若新版做过 `prisma migrate deploy` / `db push`，回滚代码后也要把数据库恢复到变更前备份（或准备对应的逆向 SQL）。
 2. **切库前务必备份**：切换 provider 不迁移数据；跨库迁移需自行导出导入（以 UTF-8 为准，注意时区与大小写）。
 3. **SQLite 单进程约束**：不要同时运行两个指向同一 `.db` 的后端进程（含 nodemon 双进程），否则报 `database is locked`。
-4. **生产密钥不进仓库**：`.env.production` 只放在服务器上，权限收紧（Linux `chmod 600`）。
+4. **生产密钥不进仓库**：`.env.production` 只放在服务器上，权限收紧（Linux `chmod 600`）；PHP 与 Node 读同一个文件，回滚时不要用发布包覆盖它。
+5. **双后端切换前留痕**：`switch-backend.bat/ps1` 会直接改写 `frontend/dist/config.js`，切换前先复制一份
+   （`copy config.js config.js.bak`），并在发布记录中写明当前指向哪套后端；回滚时按第 6.2 节「先回切前端」执行。
+6. **数据库账号分层**：应用账号（`mes_app`）仅 DML，迁移/备份用 `mes_migrate` 或 root；
+   已有数据卷/已有库不会自动重建授权：可新建 `mes_app` 并把 `DB_USER` 切过去后执行
+   `database/mes-mysql-grants.sql`，也可直接对现有 `mes_user` 执行该脚本收回 DDL（脚本中把账号名换成 `mes_user` 即可）。
 
 ---
 

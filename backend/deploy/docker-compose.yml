@@ -14,7 +14,13 @@
 #   · 若想改用 SQLite：把 DB_TYPE 改为 sqlite、DB_PATH 改为 /data/prod.db，
 #     并把 mysql 服务整个删掉/注释掉（同时给 backend 挂载数据卷）
 #
-# 安全提示：示例口令仅用于本地/内网演示，生产请改强口令并用 secrets 管理。
+# 安全提示：
+#   · 示例口令仅用于本地/内网演示，生产必须通过环境变量或 secrets 注入强口令；
+#   · 数据库端口只绑定 127.0.0.1，不对局域网暴露（远程运维请走 SSH 隧道）；
+#   · 应用账号 mes_app 仅授予 DML 权限（02-mes-mysql-grants.sql），
+#     表结构变更请用迁移账号/root 执行，禁止把 DDL 权限给应用账号；
+#   · 已有数据卷（mysql-data）不会重建账号与授权，需手工执行：
+#       docker exec -i mes-mysql mysql -uroot -p < database/mes-mysql-grants.sql
 # =============================================================================
 
 services:
@@ -28,19 +34,24 @@ services:
       - --default-authentication-plugin=mysql_native_password
       - --lower_case_table_names=0
     environment:
-      MYSQL_ROOT_PASSWORD: CHANGE_ME_ROOT_PASSWORD
+      # 口令一律通过环境变量注入，占位默认值仅用于本地演示；生产必须覆盖
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_ROOT_PASSWORD}
       MYSQL_DATABASE: mes_workshop
-      MYSQL_USER: mes_user
-      MYSQL_PASSWORD: CHANGE_ME_APP_PASSWORD
+      # 应用账号：只授予 DML（见 02-mes-mysql-grants.sql），不持有 DDL 权限
+      MYSQL_USER: mes_app
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME_APP_PASSWORD}
       TZ: Asia/Shanghai
     volumes:
       - mysql-data:/var/lib/mysql
       # initdb：容器首次初始化（数据卷为空）时自动执行；已含种子数据
       - ../../database/mes-mysql-init.sql:/docker-entrypoint-initdb.d/01-mes-mysql-init.sql:ro
+      # 02：把应用账号权限收敛为 SELECT/INSERT/UPDATE/DELETE（收回 DDL）
+      - ../../database/mes-mysql-grants.sql:/docker-entrypoint-initdb.d/02-mes-mysql-grants.sql:ro
     ports:
-      - "3306:3306"
+      # 仅绑定回环：数据库不对局域网暴露；需远程运维时用 SSH 隧道
+      - "127.0.0.1:3306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-pCHANGE_ME_ROOT_PASSWORD"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-CHANGE_ME_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -67,12 +78,14 @@ services:
       DB_TYPE: mysql
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_USER: mes_user
-      DB_PASSWORD: CHANGE_ME_APP_PASSWORD
+      # 应用账号：仅 DML 权限（DDL 由迁移账号/root 执行）
+      DB_USER: mes_app
+      DB_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME_APP_PASSWORD}
       DB_NAME: mes_workshop
-      JWT_SECRET: CHANGE_ME_STRONG_RANDOM_SECRET
+      # 生产必须注入强随机值（≥32 位，两把不同），否则 PHP 后端会拒绝启动
+      JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_STRONG_RANDOM_SECRET_32_CHARS_MIN}
       JWT_EXPIRES_IN: 2h
-      JWT_REFRESH_SECRET: CHANGE_ME_STRONG_RANDOM_REFRESH_SECRET
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-CHANGE_ME_STRONG_RANDOM_REFRESH_32_CHARS_MIN}
       JWT_REFRESH_EXPIRES_IN: 7d
       # 允许的前端来源（多个用逗号分隔；容器部署一般由 Nginx 同源代理，可填实际域名）
       CORS_ORIGIN: http://localhost:5173

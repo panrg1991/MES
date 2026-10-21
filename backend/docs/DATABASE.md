@@ -117,8 +117,11 @@ prisma/generated/sqlite/                     prisma/generated/mysql/
 DATABASE_URL="file:./dev.db"
 
 # MySQL
-DATABASE_URL="mysql://mes_user:password@127.0.0.1:3306/mes_workshop"
+DATABASE_URL="mysql://mes_app:password@127.0.0.1:3306/mes_workshop"
 ```
+
+> 账号分层（推荐）：`mes_app` 只保留 `SELECT/INSERT/UPDATE/DELETE`；
+> 建表/迁移用 `mes_migrate`（或 root）执行，脚本见 `database/mes-mysql-grants.sql`。
 
 > **注意**：`DATABASE_URL` 会被 `db-setup.js` 注入给 Prisma CLI。
 > 若使用分散参数（`DB_HOST` 等）而未设置 `DATABASE_URL`，脚本会自动拼装后传给 CLI，无需手工填写。
@@ -213,7 +216,7 @@ npm run db:setup:mysql      # 生成 Client + 建表 + 写入种子数据
 DB_TYPE=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_USER=mes_user
+DB_USER=mes_app            # 运行账号（仅 DML）；执行 db:setup 迁移时临时改为 mes_migrate / root
 DB_PASSWORD=your_password
 DB_NAME=mes_workshop
 ```
@@ -326,11 +329,11 @@ cp prisma/dev.db.bak-20260101 prisma/dev.db
 ### 8.2 MySQL
 
 ```bash
-# 备份
-mysqldump -u mes_user -p --single-transaction --routines mes_workshop > mes_workshop_$(date +%Y%m%d).sql
+# 备份（备份/恢复用迁移账号或 root；应用账号仅 DML）
+mysqldump -u mes_migrate -p --single-transaction --routines mes_workshop > mes_workshop_$(date +%Y%m%d).sql
 
 # 恢复
-mysql -u mes_user -p mes_workshop < mes_workshop_20260101.sql
+mysql -u mes_migrate -p mes_workshop < mes_workshop_20260101.sql
 ```
 
 ### 8.3 内置备份脚本
@@ -443,7 +446,7 @@ environment:
   DB_TYPE: mysql
   DB_HOST: mysql
   DB_PORT: 3306
-  DB_USER: mes_user
+  DB_USER: mes_app
   DB_PASSWORD: xxx
   DB_NAME: mes_workshop
 ```

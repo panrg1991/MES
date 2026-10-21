@@ -94,6 +94,8 @@ class Jwt
             'userId' => (int) $user['id'],
             'username' => $user['username'],
             'permissions' => $permissions,
+            // jti：登出时据此加入吊销名单（Node 端不校验该字段，互通无影响）
+            'jti' => bin2hex(random_bytes(16)),
         ), $accessSecret, self::ttl((string) Config::get('JWT_EXPIRES_IN', '2h'), 7200));
 
         $refreshToken = self::sign(array(

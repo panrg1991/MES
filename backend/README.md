@@ -230,9 +230,10 @@ curl -s http://127.0.0.1:3000/api/health
 DB_TYPE=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_USER=mes_user
+DB_USER=mes_app            # 运行账号（仅 DML）；建库/迁移请临时改用 mes_migrate 或 root
 DB_PASSWORD=your_password
 DB_NAME=mes_workshop
+# 账号最小权限脚本：database/mes-mysql-grants.sql
 
 # ③ 建表 + 种子（若用 init SQL 建库则已含种子数据，只生成 Client 即可）
 npm run db:setup:mysql     # 或 npm run db:setup（仅生成 Client）
@@ -478,7 +479,7 @@ MySQL **默认只打印命令（避免误连生产库）**，加 `--execute` 才
 | 场景 | 操作 |
 |------|------|
 | SQLite 数据损坏 / 误操作 | 停服务 → 用 `backups/` 中的备份覆盖 `prisma/*.db` → 重启 |
-| MySQL 数据回滚 | `mysql -u mes_user -p mes_workshop < backups/mes_workshop-<时间戳>.sql` |
+| MySQL 数据回滚 | `mysql -u mes_migrate -p mes_workshop < backups/mes_workshop-<时间戳>.sql`（应用账号仅 DML，恢复用迁移账号/root） |
 | 代码回滚 | 切回上一版本目录（或 `git checkout <tag>`）→ `npm ci` → `npx prisma generate` → 重启；**若表结构有变更，先备份再回滚** |
 
 ---

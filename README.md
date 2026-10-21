@@ -162,9 +162,10 @@ DB_PATH=./dev.db
 DB_TYPE=mysql
 DB_HOST=127.0.0.1
 DB_PORT=3306
-DB_USER=mes_user
+DB_USER=mes_app            # 运行账号，仅 SELECT/INSERT/UPDATE/DELETE
 DB_PASSWORD=your_password
 DB_NAME=mes_workshop
+# 账号分层：建表/迁移用 mes_migrate 或 root，见 database/mes-mysql-grants.sql
 ```
 
 完整说明（含 MySQL 建库两条路径、迁移策略、备份恢复、FAQ）见

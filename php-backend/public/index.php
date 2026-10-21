@@ -16,6 +16,7 @@ require $baseDir . '/src/Db.php';
 require $baseDir . '/src/Http.php';
 require $baseDir . '/src/Jwt.php';
 require $baseDir . '/src/Store.php';
+require $baseDir . '/src/Denylist.php';
 require $baseDir . '/src/Validate.php';
 require $baseDir . '/src/Auth.php';
 require $baseDir . '/src/Router.php';
@@ -48,6 +49,21 @@ if (PHP_SAPI === 'cli-server') {
 }
 
 Http::boot();
+
+// ==================== 配置安全自检 ====================
+// 生产环境（NODE_ENV=production）下：
+//   ① 必须存在 .env.production，否则会用默认值连错库、签发弱密钥，直接拒绝启动；
+//   ② 密钥不安全时同样拒绝启动，避免弱密钥上线。
+// 非生产环境只写日志，便于本地开发。
+$configIssues = Config::securityIssues();
+if (count($configIssues) > 0) {
+    foreach ($configIssues as $configIssue) {
+        Http::log('config_insecure', array('issue' => $configIssue));
+    }
+    if (Config::isProductionRuntime()) {
+        Http::fail('服务配置不安全：' . implode('；', $configIssues), 503);
+    }
+}
 
 // 全局限流：500 次 / 15 分钟 / IP（与 Node 端一致）
 if (!RateLimit::allow('global:' . Http::clientIp(), 500, 900)) {

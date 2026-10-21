@@ -1,4 +1,6 @@
 .env
+.env.production
 runtime/*.log
 runtime/state.json
+runtime/denylist.json
 runtime/server_start

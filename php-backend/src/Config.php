@@ -14,6 +14,12 @@ class Config
     /** @var string */
     public static $baseDir = '';
 
+    /** @var array<int,string> 实际加载的配置文件 */
+    public static $envFiles = array();
+
+    /** @var bool 是否成功加载到配置文件 */
+    private static $envFileFound = false;
+
     /**
      * 加载配置
      * @param string $baseDir php-backend 根目录
@@ -23,14 +29,19 @@ class Config
     {
         self::$baseDir = rtrim($baseDir, '/\\');
 
-        // 优先级：真实环境变量 > php-backend/.env > backend/.env
+        // 选文件口径与 Node 端（backend/src/config/env.js）完全一致：
+        //   NODE_ENV=production → .env.production；其他 → .env
+        // 优先级：真实环境变量 > php-backend/<env> > backend/<env>
+        $envName = self::isProductionRuntime() ? '.env.production' : '.env';
         $files = array(
-            self::$baseDir . '/.env',
-            dirname(self::$baseDir) . '/backend/.env',
+            self::$baseDir . '/' . $envName,
+            dirname(self::$baseDir) . '/backend/' . $envName,
         );
         foreach ($files as $file) {
             if (is_file($file)) {
                 self::parseFile($file);
+                self::$envFiles[] = $file;
+                self::$envFileFound = true;
             }
         }
 
@@ -177,21 +188,67 @@ class Config
     }
 
     /**
-     * 站点根地址（用于健康检查等）
+     * 运行环境（默认 development，与 Node 端一致）
      * @return string
      */
     public static function nodeEnv()
     {
-        return self::get('NODE_ENV', 'development');
+        return (string) self::get('NODE_ENV', 'development');
     }
 
     /**
-     * 是否开发环境
+     * 是否生产运行（仅看真实环境变量，与 Node 端选择配置文件的口径一致）
+     * @return bool
+     */
+    public static function isProductionRuntime()
+    {
+        return strtolower(trim((string) getenv('NODE_ENV'))) === 'production';
+    }
+
+    /**
+     * 是否加载到配置文件
+     * @return bool
+     */
+    public static function envFileFound()
+    {
+        return self::$envFileFound;
+    }
+
+    /**
+     * 键是否被显式配置（真实环境变量或 .env 文件）
+     * @param string $key 键名
+     * @return bool
+     */
+    public static function has($key)
+    {
+        return getenv($key) !== false || array_key_exists($key, self::$data);
+    }
+
+    /**
+     * 是否向前端返回异常详情
+     * 默认关闭（生产不泄露 SQL / 路径 / 主机等信息）；
+     * 仅在显式设置 APP_DEBUG=true，或显式声明 NODE_ENV=development 时开启。
+     * @return bool
+     */
+    public static function debug()
+    {
+        $flag = strtolower(trim((string) self::get('APP_DEBUG', '')));
+        if ($flag === 'true' || $flag === '1' || $flag === 'on') {
+            return true;
+        }
+        if ($flag === 'false' || $flag === '0' || $flag === 'off') {
+            return false;
+        }
+        return self::has('NODE_ENV') && self::nodeEnv() === 'development';
+    }
+
+    /**
+     * 是否开发环境（等价于 debug()，保留旧方法名）
      * @return bool
      */
     public static function isDev()
     {
-        return self::nodeEnv() !== 'production';
+        return self::debug();
     }
 
     /**
@@ -241,15 +298,52 @@ class Config
     }
 
     /**
-     * 判断 JWT 密钥是否仍为默认值
+     * 判断 JWT 密钥是否不安全
+     * 判定口径：缺失 / 内置默认值 / 示例占位值（含 CHANGE_ME）/ 长度 < 32 / 两把密钥相同
      * @return bool
      */
     public static function hasInsecureSecrets()
     {
-        $access = (string) self::get('JWT_SECRET', 'default-jwt-secret');
-        $refresh = (string) self::get('JWT_REFRESH_SECRET', 'default-refresh-secret');
-        return $access === 'default-jwt-secret'
-            || $refresh === 'default-refresh-secret'
-            || $access === $refresh;
+        $access = trim((string) self::get('JWT_SECRET', ''));
+        $refresh = trim((string) self::get('JWT_REFRESH_SECRET', ''));
+
+        if ($access === '' || $refresh === '') {
+            return true;
+        }
+        if ($access === 'default-jwt-secret' || $refresh === 'default-refresh-secret') {
+            return true;
+        }
+        if ($access === $refresh) {
+            return true;
+        }
+        foreach (array($access, $refresh) as $secret) {
+            if (stripos($secret, 'CHANGE_ME') !== false || strlen($secret) < 32) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 配置安全问题清单（空数组表示无问题）
+     * 说明：生产环境出现清单项时应拒绝启动，避免连错库 / 使用弱密钥。
+     * @return array<int,string>
+     */
+    public static function securityIssues()
+    {
+        $issues = array();
+        if (!self::$envFileFound) {
+            $issues[] = '未找到配置文件（' . (self::isProductionRuntime() ? '.env.production' : '.env') . '）';
+        }
+        if (!self::isProductionRuntime()) {
+            return $issues;
+        }
+        if (self::nodeEnv() !== 'production') {
+            $issues[] = 'NODE_ENV 未明确设为 production';
+        }
+        if (self::hasInsecureSecrets()) {
+            $issues[] = 'JWT_SECRET / JWT_REFRESH_SECRET 仍为默认值、占位值、长度不足 32 位或两把密钥相同';
+        }
+        return $issues;
     }
 }

@@ -59,6 +59,7 @@ class AuthController
             'userId' => (int) $user['id'],
             'username' => $user['username'],
             'permissions' => $permissions,
+            'jti' => bin2hex(random_bytes(16)),
         ), (string) Config::get('JWT_SECRET', 'default-jwt-secret'), Jwt::ttl(
             (string) Config::get('JWT_EXPIRES_IN', '2h'),
             7200
@@ -74,6 +75,17 @@ class AuthController
      */
     public static function logout($params)
     {
+        // 携带有效的 Access Token 时加入吊销名单，使其在剩余有效期内立即失效
+        $token = Auth::bearerToken();
+        $revoked = $token !== '' ? Auth::revoke($token) : false;
+        if ($revoked) {
+            $payload = Auth::tokenPayload($token);
+            Http::log('logout', array(
+                'userId' => is_array($payload) && isset($payload['userId']) ? (int) $payload['userId'] : 0,
+                'username' => is_array($payload) && isset($payload['username'])
+                    ? (string) $payload['username'] : '',
+            ));
+        }
         Http::ok(null, '已退出登录');
     }
 
