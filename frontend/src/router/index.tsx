@@ -14,6 +14,7 @@
  */
 
 import { lazy, Suspense } from 'react';
+import type { ReactNode } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from '@/layouts/MainLayout';
 import AuthLayout from '@/layouts/AuthLayout';
@@ -90,6 +91,18 @@ const ProductionReportPage = lazy(
 // ==================== 路由配置 ====================
 
 /**
+ * 路由级权限包装
+ * 目的：菜单隐藏只是"看不见"，直接用 URL 访问仍需拦截，避免无权限用户进入空白页。
+ * 权限码与后端 requirePermission、菜单 code 保持一致（`code:view` 亦可命中）。
+ * @param permission 权限编码
+ * @param element 页面元素
+ * @returns 带权限守卫的元素
+ */
+function guarded(permission: string, element: ReactNode) {
+  return <ProtectedRoute permission={permission}>{element}</ProtectedRoute>;
+}
+
+/**
  * 应用路由组件
  * 结构：AuthLayout（登录页） + MainLayout（ProtectedRoute 包裹的业务页面）
  */
@@ -110,57 +123,126 @@ function AppRouter() {
             </ProtectedRoute>
           }
         >
-          {/* T02 已实现 */}
-          <Route path="/system/users" element={<UserManagement />} />
-          <Route path="/system/roles" element={<RoleManagement />} />
+          {/* T02 已实现（修改密码对所有登录用户开放，不加权限码） */}
+          <Route
+            path="/system/users"
+            element={guarded('system:users', <UserManagement />)}
+          />
+          <Route
+            path="/system/roles"
+            element={guarded('system:roles', <RoleManagement />)}
+          />
           <Route path="/system/settings" element={<ChangePassword />} />
 
           {/* T03 已实现 */}
-          <Route path="/production/orders" element={<WorkOrderList />} />
-          <Route path="/production/orders/:id" element={<WorkOrderDetail />} />
-          <Route path="/equipment/list" element={<EquipmentList />} />
-          <Route path="/equipment/:id" element={<EquipmentDetail />} />
+          <Route
+            path="/production/orders"
+            element={guarded('production:order', <WorkOrderList />)}
+          />
+          <Route
+            path="/production/orders/:id"
+            element={guarded('production:order', <WorkOrderDetail />)}
+          />
+          <Route
+            path="/equipment/list"
+            element={guarded('equipment:list', <EquipmentList />)}
+          />
+          <Route
+            path="/equipment/:id"
+            element={guarded('equipment:list', <EquipmentDetail />)}
+          />
 
           {/* T04 已实现 */}
-          <Route path="/quality/inspection" element={<InspectionList />} />
-          <Route path="/quality/defects" element={<DefectList />} />
-          <Route path="/material/items" element={<MaterialList />} />
-          <Route path="/material/bom" element={<BOMManagement />} />
-          <Route path="/material/inventory" element={<InventoryManagement />} />
+          <Route
+            path="/quality/inspection"
+            element={guarded('quality:inspection', <InspectionList />)}
+          />
+          <Route
+            path="/quality/defects"
+            element={guarded('quality:defect', <DefectList />)}
+          />
+          <Route
+            path="/material/items"
+            element={guarded('material:items', <MaterialList />)}
+          />
+          <Route
+            path="/material/bom"
+            element={guarded('material:bom', <BOMManagement />)}
+          />
+          <Route
+            path="/material/inventory"
+            element={guarded('material:inventory', <InventoryManagement />)}
+          />
 
           {/* T05 已实现 */}
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route
+            path="/dashboard"
+            element={guarded('dashboard', <Dashboard />)}
+          />
 
           {/* ==================== T06 注册的 P1 路由（当前指向占位页） ==================== */}
 
           {/* 生产管理（P1-01，T08 替换页面内容） */}
-          <Route path="/production/schedule" element={<ProductionSchedule />} />
+          <Route
+            path="/production/schedule"
+            element={guarded('production:schedule', <ProductionSchedule />)}
+          />
 
           {/* 设备管理（P1-02 / P1-03，T07 替换页面内容）
               注意：静态段 /equipment/maintenance、/equipment/breakdown 与 P0 动态段
               /equipment/:id 共存，RR6 中静态段优先匹配（PRD 风险 R1） */}
-          <Route path="/equipment/maintenance" element={<MaintenancePlan />} />
-          <Route path="/equipment/breakdown" element={<BreakdownList />} />
+          <Route
+            path="/equipment/maintenance"
+            element={guarded('equipment:maintenance', <MaintenancePlan />)}
+          />
+          <Route
+            path="/equipment/breakdown"
+            element={guarded('equipment:breakdown', <BreakdownList />)}
+          />
 
           {/* 质量管理（P1-04，T09 替换页面内容） */}
-          <Route path="/quality/traceability" element={<Traceability />} />
+          <Route
+            path="/quality/traceability"
+            element={guarded('quality:traceability', <Traceability />)}
+          />
 
           {/* 物料管理（P1-07 / P1-08，T09 替换页面内容） */}
-          <Route path="/material/batches" element={<BatchManagement />} />
-          <Route path="/material/trace" element={<MaterialTrace />} />
+          <Route
+            path="/material/batches"
+            element={guarded('material:batch', <BatchManagement />)}
+          />
+          <Route
+            path="/material/trace"
+            element={guarded('material:trace', <MaterialTrace />)}
+          />
           <Route
             path="/material/inventory-warning"
-            element={<InventoryWarning />}
+            element={guarded('material:warning', <InventoryWarning />)}
           />
 
           {/* 人员管理（P1-09 / P1-10，T08 替换页面内容） */}
-          <Route path="/personnel/shifts" element={<ShiftManagement />} />
-          <Route path="/personnel/schedule" element={<ScheduleManagement />} />
-          <Route path="/personnel/work-hours" element={<WorkHours />} />
+          <Route
+            path="/personnel/shifts"
+            element={guarded('personnel:shift', <ShiftManagement />)}
+          />
+          <Route
+            path="/personnel/schedule"
+            element={guarded('personnel:schedule', <ScheduleManagement />)}
+          />
+          <Route
+            path="/personnel/work-hours"
+            element={guarded('personnel:workhours', <WorkHours />)}
+          />
 
           {/* 报表中心（P1-05 / P1-06，T10 替换页面内容） */}
-          <Route path="/reports/oee" element={<OeeAnalysis />} />
-          <Route path="/reports/production" element={<ProductionReportPage />} />
+          <Route
+            path="/reports/oee"
+            element={guarded('reports:oee', <OeeAnalysis />)}
+          />
+          <Route
+            path="/reports/production"
+            element={guarded('reports:production', <ProductionReportPage />)}
+          />
         </Route>
 
         {/* 根路径重定向到看板 */}

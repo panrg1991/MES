@@ -83,6 +83,37 @@ function buildSqliteUrl() {
   return dbPath.startsWith('file:') ? dbPath : `file:${dbPath}`;
 }
 
+/**
+ * 解析 CORS 允许来源列表
+ * 口径：英文逗号分隔；`*` 表示不限制；去空格、忽略空项
+ * @param value 原始配置值
+ * @returns {string[]} 来源列表（始终至少包含默认值）
+ */
+function parseCorsOrigins(value) {
+  const raw = String(value || 'http://localhost:5173');
+  const list = raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : ['http://localhost:5173'];
+}
+
+/**
+ * 解析反向代理信任配置（express `trust proxy`）
+ * 口径：false/0/空 → 不信任（默认）；true → 信任 1 跳（Nginx 单层）；
+ *      数字 → 信任的代理层数；其他字符串（如 loopback/10.0.0.0/8）原样透传
+ * @param value 原始配置值
+ * @returns {boolean|number|string} express 可接受的 trust proxy 值
+ */
+function parseTrustProxy(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw || raw === 'false' || raw === '0') return false;
+  if (raw === 'true') return 1;
+  const hops = Number(raw);
+  if (Number.isInteger(hops) && hops > 0) return hops;
+  return raw;
+}
+
 /** 显式声明或推断出的数据库类型 */
 const dbType = normalizeDbType(
   process.env.DB_TYPE || detectDbTypeFromUrl(process.env.DATABASE_URL),
@@ -110,6 +141,13 @@ const config = {
   /** 服务端口 */
   port: parseInt(process.env.PORT || '3000', 10),
 
+  /**
+   * 监听地址
+   * 0.0.0.0：允许局域网内其他电脑访问（前后端分机部署、车间多终端访问必须）
+   * 127.0.0.1：仅本机可访问（配合同机 Nginx 反代时更安全）
+   */
+  host: process.env.HOST || '0.0.0.0',
+
   /** 数据库类型：sqlite | mysql */
   dbType,
 
@@ -128,8 +166,17 @@ const config = {
   /** Refresh Token 有效期 */
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
 
-  /** CORS 允许来源（多个用英文逗号分隔） */
+  /** CORS 允许来源（原始字符串，多个用英文逗号分隔） */
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+
+  /** CORS 允许来源列表（已解析为数组；`*` 表示不限制） */
+  corsOrigins: parseCorsOrigins(process.env.CORS_ORIGIN),
+
+  /**
+   * 反向代理信任配置（Nginx / IIS ARR 前置时按真实 IP 限流需要）
+   * 默认 false（直连部署）；反代后设为 true 或代理层数
+   */
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 
   /** 请求体大小限制（MB） */
   bodyLimit: parseInt(process.env.BODY_LIMIT || '10', 10),
@@ -177,4 +224,23 @@ function describeDatabase() {
   return config.databaseUrl;
 }
 
-module.exports = { config, validateConfig, describeDatabase, SUPPORTED_DB_TYPES };
+/**
+ * 是否仍在使用不安全的 JWT 密钥（默认值 / 两个密钥相同）
+ * 生产环境启动时据此打印醒目告警，避免把演示密钥带上线。
+ * @returns {boolean} true 表示存在安全风险
+ */
+function hasInsecureSecrets() {
+  return (
+    config.jwtSecret === 'default-jwt-secret' ||
+    config.jwtRefreshSecret === 'default-refresh-secret' ||
+    config.jwtSecret === config.jwtRefreshSecret
+  );
+}
+
+module.exports = {
+  config,
+  validateConfig,
+  describeDatabase,
+  hasInsecureSecrets,
+  SUPPORTED_DB_TYPES,
+};

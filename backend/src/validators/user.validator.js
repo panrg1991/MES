@@ -40,6 +40,7 @@ const updateUserSchema = z.object({
   department: z.string().min(1, '部门不能为空').max(100, '部门最多 100 个字符').optional(),
   roleIds: z
     .array(z.number().int().positive())
+    .min(1, '至少选择一个角色')
     .optional(),
 });
 

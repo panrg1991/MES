@@ -5,6 +5,12 @@
 
 const { verifyAccessToken } = require('../utils/jwt');
 const { sendUnauthorized } = require('../utils/response');
+const { logger } = require('../utils/logger');
+
+/** 取当前请求的 path（去掉 query，避免敏感参数进入日志） */
+function requestPath(req) {
+  return req.originalUrl.split('?')[0];
+}
 
 /**
  * JWT 认证中间件
@@ -16,12 +22,22 @@ function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
+    logger.warn('auth_missing_token', {
+      requestId: req.id,
+      method: req.method,
+      path: requestPath(req),
+    });
     return sendUnauthorized(res, '未提供认证令牌');
   }
 
   // 解析 Bearer Token
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    logger.warn('auth_bad_format', {
+      requestId: req.id,
+      method: req.method,
+      path: requestPath(req),
+    });
     return sendUnauthorized(res, '认证令牌格式错误');
   }
 
@@ -29,6 +45,11 @@ function authMiddleware(req, res, next) {
   const decoded = verifyAccessToken(token);
 
   if (!decoded) {
+    logger.warn('auth_invalid_token', {
+      requestId: req.id,
+      method: req.method,
+      path: requestPath(req),
+    });
     return sendUnauthorized(res, '认证令牌已过期或无效');
   }
 
@@ -56,10 +77,21 @@ function requirePermission(permissionCode) {
     const { permissions } = req.user;
 
     if (!permissions.includes(permissionCode)) {
+      // 越权尝试必须留痕：便于发现账号被盗用或权限配置错误
+      logger.warn('permission_denied', {
+        requestId: req.id,
+        userId: req.user.userId,
+        username: req.user.username,
+        permission: permissionCode,
+        method: req.method,
+        path: requestPath(req),
+      });
+
       return res.status(403).json({
         code: 403,
         data: null,
         message: `无权限：需要 ${permissionCode} 权限`,
+        requestId: req.id,
       });
     }
 

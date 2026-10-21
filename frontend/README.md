@@ -90,6 +90,9 @@ frontend/
 ├── .env                      # 通用环境变量（VITE_API_BASE_URL=/api）
 ├── .env.production           # 生产环境变量（同名变量覆盖 .env）
 ├── .env.example              # 环境变量模板（部署时参考，勿放敏感值）
+├── public/
+│   ├── config.js             # ★ 运行时配置：部署后改后端地址/子路径，免重新构建
+│   └── favicon.svg           # 站点图标（构建时复制到 dist/）
 ├── deploy/
 │   ├── nginx.conf.example    # Nginx 站点配置示例（推荐）
 │   ├── web.config.example    # IIS 配置示例（Windows）
@@ -270,17 +273,30 @@ npm run dev
 | `.env.production` | 同上（值一致） | **`npm run build` 时覆盖 `.env` 的同名变量** |
 | `.env.example` | 模板 + 取值策略说明（**不含敏感值**） | 供部署时复制参考，不被 Vite 加载 |
 
-### 5.2 唯一必需变量：`VITE_API_BASE_URL`
+### 5.2 后端地址配置：运行时 `config.js` 优先（推荐）
 
-前端 axios 实例的 `baseURL` 取自该变量（`src/api/request.ts`）：
+axios 实例的 `baseURL` 由 `src/config/runtime.ts` 解析，优先级（高 → 低）：
 
-```ts
-const request = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',   // 未设置时兜底为 '/api'
-  timeout: 30000,
-  ...
-});
+1. **部署后修改 `dist/config.js`**（`window.__MES_CONFIG__.API_BASE_URL`）—— 同一份产物可切换任意后端，**无需重新构建**；
+2. 构建期 `VITE_API_BASE_URL`；
+3. 内置兜底 `'/api'`。
+
+```js
+// dist/config.js —— 部署到服务器后可直接用记事本修改，刷新页面即生效
+window.__MES_CONFIG__ = {
+  API_BASE_URL: 'http://192.168.1.100:3000/api', // 留空 = 沿用构建期配置（默认 /api）
+  APP_TITLE: '',                                 // 留空 = 默认标题
+  BASE_PATH: '',                                 // 子目录部署填 '/mes/'（首尾都要斜杠）
+};
 ```
+
+容错规则：只填 `http://192.168.1.100:3000`（漏写 `/api`）会自动补全为 `.../api`；末尾多余斜杠会被去掉。
+
+> 子路径部署（如 `http://host/mes/`）需**同时**设置构建期 `VITE_BASE_PATH=/mes/` 与运行时 `BASE_PATH: '/mes/'`，
+> 否则刷新子路由或跳转登录页会 404。
+> 登录页底部与「系统信息」弹窗均显示当前生效的 API 地址，可直接确认配置是否被读取。
+
+### 5.3 构建期变量 `VITE_API_BASE_URL`（可选兜底）
 
 **取值策略（推荐度由高到低）**：
 
@@ -334,15 +350,17 @@ npm run build
 ```
 
 > **构建机要求**：Node ≥ 18.18（推荐 20 LTS）、能访问 npm 源。**部署机（跑 Nginx 的那台）不需要 Node**。
+>
+> **一份产物多环境复用**：`dist/config.js` 不会被压缩/改名，部署后可直接编辑其中的 `API_BASE_URL`
+> 切换后端地址（见 §5.2），因此推荐「构建一次 → 各环境安装同一份 dist → 改 config.js」。
 
 ### 6.2 产物结构（`dist/`）
 
 ```
 dist/
 ├── index.html                  # 入口 HTML（引用带哈希的 JS/CSS，绝不缓存）
-├── vite.svg                    # 说明：index.html 中引用了 /vite.svg 作为 favicon，
-│                               #   但工程当前没有 public/ 目录，因此该请求会 404
-│                               #   （仅控制台一条 404，不影响功能；如需消除可建 public/vite.svg）
+├── config.js                   # ★ 运行时配置（部署后可直接编辑，无需重新构建）
+├── favicon.svg                 # 站点图标（来自 public/）
 └── assets/
     ├── index-<hash>.js         # 应用入口 chunk
     ├── index-<hash>.css        # 全局样式
@@ -643,13 +661,13 @@ python -m http.server 8080 -d dist    # Python 3 环境
 | **接口 404（路径带 /api 但后端收不到）** | `proxy_pass` 末尾多写了 `/`，把 `/api` 前缀剥掉了 | 改为 `proxy_pass http://127.0.0.1:3000;`（**末尾无斜杠、无路径**）；后端所有路由都挂在 `/api` 下 |
 | **接口 502 / 连不上** | 后端未启动或端口不符 | `curl http://127.0.0.1:3000/api/health` 确认；核对后端实际端口与 `proxy_pass` / `vite.config.ts` 的 3000 是否一致 |
 | **跨域错误（CORS）** | 前端 `VITE_API_BASE_URL` 写了后端绝对地址，绕过了同源代理 | 改为 `/api` 并用 Nginx 反代（§5.2 方案①），改完**重新 build** |
-| **改了环境变量不生效** | Vite 在**构建期**注入变量；只改了文件没重新打包 | `npm ci && npm run build` 重新打包并重新上传 `dist/` |
+| **改了环境变量不生效** | ① 修改的是 `.env*` 但没重新打包（Vite 构建期注入）；② 浏览器缓存了旧 `config.js` | ① `npm run build` 后重新上传 `dist/`；② 直接改部署目录的 `dist/config.js` 并 Ctrl+F5；排障可看「系统信息」中的 API 地址 |
 | **打包后资源 404 / 白屏** | ① 部署在子路径但 `base` 仍是默认 `/`；② 只上传了 index.html 没上传 assets；③ 服务器 MIME 类型缺失（`application/javascript`） | ① 加 `base: '/子路径/'` 并重新构建；② 完整上传 `dist/` 目录；③ 补 Nginx `include mime.types;`（IIS 补 MIME 映射） |
 | **白屏（无 404）** | 浏览器控制台报 chunk 加载失败 / JS 语法错误 | F12 Console + Network 定位；确认浏览器版本 ≥ Chrome 87；确认 `index.html` 与 `assets/` 来自同一次构建（混用新旧产物会因哈希不匹配而失败） |
 | **一直是旧版本页面** | `index.html` 被缓存 | 配置 `index.html` 不缓存（`deploy/nginx.conf.example` ②已含）；CDN/代理层也要放行 |
 | **刷新后又被踢回登录页** | token 过期或刷新失败（`POST /api/auth/refresh` 未通） | 确认 `/api/auth/refresh` 也能正常反代（同属 `/api/`）；检查后端 JWT 配置 |
 | **导出下载到的是 JSON 文本** | 响应拦截器把二进制当 JSON 解析（`responseType: 'blob'` 未生效） | 确认 `src/api/request.ts` 的 blob 短路逻辑存在（本工程已实现），且代理未改写 `Content-Type` |
-| **favicon 404（`/vite.svg`）** | 工程没有 `public/` 目录，但 `index.html` 引用了 `/vite.svg` | 属已知无害项：仅控制台一条 404，不影响功能。如需消除，新建 `frontend/public/vite.svg` 后重新 build |
+| **favicon 404（`/vite.svg`）** | 旧版本 `index.html` 引用了不存在的 `/vite.svg` | 已修复：工程新增 `public/favicon.svg`，`index.html` 使用 `%BASE_URL%favicon.svg`（子路径部署同样正确） |
 | **Nginx 报 `unknown directive "gzip_static"`** | Nginx 未编译 `ngx_http_gzip_static_module` | 删除 `gzip_static on;` 一行（仅少一层预压缩优化，`gzip on` 仍生效） |
 | **Windows 上 `nginx -t` 路径报错** | 使用了反斜杠或路径含空格未加引号 | 路径统一用正斜杠（`D:/mes/frontend/dist`） |
 | **接口偶发 429（限流）** | 反代未透传真实客户端 IP，所有请求被后端识别为同一 IP | 确保 `proxy_set_header X-Real-IP / X-Forwarded-For` 已配置（示例已含） |
@@ -662,7 +680,7 @@ python -m http.server 8080 -d dist    # Python 3 环境
 
 | 项 | 约定 |
 |----|------|
-| **基础地址** | `baseURL = import.meta.env.VITE_API_BASE_URL \|\| '/api'`；所有接口路径以 `/api` 开头 |
+| **基础地址** | `baseURL` 由 `src/config/runtime.ts` 解析：`dist/config.js` > `VITE_API_BASE_URL` > `/api`；所有接口路径以 `/api` 开头 |
 | **统一响应体** | `{ code: number, data: T \| null, message: string, errors?: [{ field, message }] }`；业务成功为 `code = 200`（创建为 201） |
 | **业务错误** | HTTP 200 但 `code ≠ 200/201` 视为业务失败，前端弹出 `message` 并 reject |
 | **鉴权** | 请求头 `Authorization: Bearer <token>`；token 存于 localStorage 的 `mes_token` |

@@ -379,6 +379,8 @@ nssm start MES-Backend
 | 变量 | 默认值 | 作用 | 生产是否必须修改 |
 |------|--------|------|------------------|
 | `PORT` | `3000` | HTTP 监听端口 | 按需（改动后同步 Nginx / 防火墙） |
+| `HOST` | `0.0.0.0` | 监听地址：`0.0.0.0` 允许局域网访问，`127.0.0.1` 仅本机（配合同机反代） | 前后端分机部署时保持 `0.0.0.0` |
+| `TRUST_PROXY` | `false` | 反向代理信任层数：`false` 直连 / `true` 信任 1 层 / 数字为层数 | 部署在 Nginx/IIS ARR 后设为 `true`（否则限流按代理 IP 计数） |
 | `NODE_ENV` | `development` | 决定加载哪个 env 文件；影响 Prisma 日志与 morgan 格式 | **必须**设为 `production`（在启动命令/PM2 里设置，写在 .env 内无效） |
 | `DB_TYPE` | `sqlite` | 数据库类型：`sqlite` \| `mysql`，运行时按此加载对应 Client | **必须**明确指定（生产建议 `mysql`） |
 | `DB_PATH` | `./dev.db` | SQLite 库文件路径（相对 `prisma/`），`DB_TYPE=sqlite` 时生效 | 生产改为 `./prod.db` 等 |
@@ -417,13 +419,11 @@ location /api/ {
 }
 ```
 
-> **限流与真实 IP 的注意事项（重要）**：`src/app.js` 中的 `express-rate-limit` 使用请求来源 IP 计数，
-> 但应用当前**未设置 `app.set('trust proxy', 1)`**。放在 Nginx 之后时：
-> - 所有请求会被视为来自代理 IP（`127.0.0.1`），限流变成「全站共享 500 次/15 分钟」；
-> - `express-rate-limit` 检测到 `X-Forwarded-For` 而未信任代理时会打印告警（`ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`）。
->
-> 内网单车间场景影响很小；若需要按真实客户端 IP 限流，请在 `src/app.js` 顶层补一行
-> `app.set('trust proxy', 1);`（属代码改动，需回归验证后上线）。
+> **限流与真实 IP 的注意事项（重要）**：`src/app.js` 中的 `express-rate-limit` 使用请求来源 IP 计数。
+> 部署在 Nginx 之后时，请在 `.env.production` 设置 **`TRUST_PROXY=true`**（已内置支持，无需改代码）：
+> - 未开启时所有请求会被视为来自代理 IP（`127.0.0.1`），限流变成「全站共享 500 次/15 分钟」；
+> - 开启后按 `X-Forwarded-For` 取真实客户端 IP，多台车间终端互不影响；
+> - 前置代理超过一层（如 CDN + Nginx）时，把 `TRUST_PROXY` 设为层数（如 `2`）。
 
 ---
 
@@ -435,8 +435,24 @@ location /api/ {
 | 应用日志 | `console.log` 输出到 stdout | PM2 日志 / NSSM 重定向 |
 | Prisma 日志 | 开发 `query,info,warn,error`；生产仅 `error` | `src/config/database.js` |
 | 健康检查 | `GET /api/health` → `{code:200,data:{status:'ok',timestamp,uptime}}` | `src/routes/index.js`；可用于负载均衡探活与监控 |
-| 限流 | **500 次 / 15 分钟 / IP**，仅作用于 `/api` 前缀 | `src/app.js` 中 `rateLimit({windowMs, max})`；**无环境变量**，调整需改代码后重启 |
+| 限流 | **500 次 / 15 分钟 / IP**，仅作用于 `/api` 前缀；登录接口额外 **20 次 / 15 分钟 / IP**（成功不计） | `src/app.js`、`src/routes/auth.routes.js`；调整需改代码后重启 |
 | 优雅关闭 | SIGINT/SIGTERM → 关服务 → 断库 → 退出（最长 5s） | `src/server.js`，与 PM2 `kill_timeout: 5000` 配合 |
+
+### 8.1 并发、幂等与登录防护（P0 加固）
+
+| 机制 | 行为 | 位置 |
+|------|------|------|
+| 单进程串行锁 | 同一工单的「编辑 / 状态流转 / 报工」串行；排程写操作（冲突检测 + 写入）全局串行 | `src/utils/mutex.js` |
+| 报工幂等 | `POST /api/production/:id/reports` 支持 `requestId`（8–64 字符）；重复提交返回原记录，不重复累加 | `production.service.js` |
+| 报工上限 | 「完成 + 不良」不得超过剩余可报数量，超出返回 400 | `production.service.js` |
+| 库存扣减 | 出库使用 `WHERE quantity >= 出库量` 的条件扣减，并发下不产生负库存 | `material.service.js` |
+| 状态机 CAS | 工单 / 排程流转按「读取时状态」条件更新，并发重复流转返回 409 | `production.service.js`、`schedule.service.js` |
+| 登录锁定 | 同一账号 15 分钟内失败 5 次 → 锁定 15 分钟（429）；状态在进程内存，重启清零 | `auth.service.js` |
+| 管理员保护 | 不可修改 `system:admin` 角色权限；不可停用/删除最后一个管理员；不可停用/删除当前登录账号 | `role.service.js`、`user.service.js` |
+| 看板权限 | 所有 `/api/dashboard/*` 需要 `dashboard:view` | `routes/dashboard.routes.js` |
+
+> **部署前提**：上述串行锁与登录锁定均为**单进程内存实现**，PM2 必须保持 `instances: 1`。
+> 若改为多实例 + MySQL，需要替换为数据库行锁 / 分布式锁 / Redis 计数。
 
 ---
 

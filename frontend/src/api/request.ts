@@ -11,11 +11,12 @@ import axios, {
 } from 'axios';
 import { message } from 'antd';
 import { STORAGE_KEYS } from '@/utils/constants';
+import { resolveAppPath, runtimeConfig } from '@/config/runtime';
 import type { ApiResponse } from '@/types/api';
 
-/** Axios 实例 */
+/** Axios 实例（基地址来自运行时配置：public/config.js > 构建期 VITE_API_BASE_URL > /api） */
 const request = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: runtimeConfig.apiBaseUrl,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -24,8 +25,37 @@ const request = axios.create({
 
 /** 是否正在刷新 Token */
 let isRefreshing = false;
+
+/** 刷新期间挂起的请求（成功则重放，失败则统一 reject，防止 Promise 永久悬挂） */
+interface PendingRequest {
+  /** 原始请求配置 */
+  config: InternalAxiosRequestConfig & { _retry?: boolean };
+  /** 重放结果回调 */
+  resolve: (value: unknown) => void;
+  /** 失败回调 */
+  reject: (reason: unknown) => void;
+}
+
 /** 等待 Token 刷新的请求队列 */
-let pendingRequests: Array<() => void> = [];
+let pendingRequests: PendingRequest[] = [];
+
+/** 刷新成功：重放队列中的请求 */
+function flushPendingRequests(): void {
+  const queue = pendingRequests;
+  pendingRequests = [];
+  queue.forEach(({ config, resolve }) => {
+    // 标记已重试，避免重放后再次 401 又触发刷新（刷新风暴）
+    config._retry = true;
+    resolve(request(config));
+  });
+}
+
+/** 刷新失败：拒绝队列中的请求（否则调用方会一直等待） */
+function rejectPendingRequests(reason: unknown): void {
+  const queue = pendingRequests;
+  pendingRequests = [];
+  queue.forEach(({ reject }) => reject(reason));
+}
 
 /** 从 localStorage 获取 Token */
 function getToken(): string | null {
@@ -45,7 +75,8 @@ function clearAuthAndRedirect(): void {
   localStorage.removeItem(STORAGE_KEYS.PERMISSIONS);
   // 同步清除 Zustand persist 存储，防止页面刷新后 rehydrate 到旧的认证状态
   localStorage.removeItem(STORAGE_KEYS.AUTH_STORE);
-  window.location.href = '/login';
+  // 使用带部署基路径的登录地址（子目录部署时不能直接跳 /login）
+  window.location.href = resolveAppPath('/login');
 }
 
 // ==================== 请求拦截器 ====================
@@ -104,8 +135,8 @@ request.interceptors.response.use(
     }
 
     if (!response) {
-      // 网络错误
-      message.error('网络异常，请检查网络连接');
+      // 网络错误：带上当前 API 地址，便于现场快速定位「后端未启动 / 地址配错」两类问题
+      message.error(`网络异常，无法连接服务（${runtimeConfig.apiBaseUrl}）`);
       return Promise.reject(error);
     }
 
@@ -118,12 +149,10 @@ request.interceptors.response.use(
       };
 
       if (!originalConfig._retry) {
-        // 如果已经在刷新中，将请求加入队列等待
+        // 如果已经在刷新中，将请求加入队列等待（保存 reject，刷新失败时统一拒绝）
         if (isRefreshing) {
-          return new Promise((resolve) => {
-            pendingRequests.push(() => {
-              resolve(request(originalConfig));
-            });
+          return new Promise((resolve, reject) => {
+            pendingRequests.push({ config: originalConfig, resolve, reject });
           });
         }
 
@@ -138,7 +167,7 @@ request.interceptors.response.use(
 
           // 调用刷新 Token 接口
           const refreshResponse = await axios.post<ApiResponse<{ token: string }>>(
-            `${import.meta.env.VITE_API_BASE_URL || '/api'}/auth/refresh`,
+            `${runtimeConfig.apiBaseUrl}/auth/refresh`,
             { refreshToken },
           );
 
@@ -150,12 +179,13 @@ request.interceptors.response.use(
           localStorage.setItem(STORAGE_KEYS.TOKEN, newToken);
 
           // 重放队列中的等待请求
-          pendingRequests.forEach((callback) => callback());
-          pendingRequests = [];
+          flushPendingRequests();
 
           // 重放当前请求
           return request(originalConfig);
-        } catch {
+        } catch (refreshError) {
+          // 刷新失败：先拒绝队列中的请求，再清除登录态并跳转
+          rejectPendingRequests(refreshError);
           clearAuthAndRedirect();
           return Promise.reject(error);
         } finally {

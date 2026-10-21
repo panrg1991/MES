@@ -11,8 +11,11 @@ import { useAuthStore } from '@/stores/authStore';
 interface ProtectedRouteProps {
   /** 子路由 */
   children: React.ReactNode;
-  /** 需要的权限编码，不传则仅校验登录状态 */
-  permission?: string;
+  /**
+   * 需要的权限编码（多个时任一命中即可），不传则仅校验登录状态
+   * 判定规则：命中 `code` 或 `code:view` 均视为有权限（与菜单显示口径一致）
+   */
+  permission?: string | string[];
 }
 
 /** 路由守卫：检查登录状态和权限 */
@@ -25,8 +28,21 @@ function ProtectedRoute({ children, permission }: ProtectedRouteProps) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
+  const permissionList = permission
+    ? Array.isArray(permission)
+      ? permission
+      : [permission]
+    : [];
+
+  // 菜单权限通常有配套的 `xxx:view` 按钮权限，两者任一命中即允许进入
+  const allowed =
+    permissionList.length === 0 ||
+    permissionList.some(
+      (code) => hasPermission(code) || hasPermission(`${code}:view`),
+    );
+
   // 已登录但无权限 → 显示 403 页面
-  if (permission && !hasPermission(permission)) {
+  if (!allowed) {
     return (
       <Result
         status="403"

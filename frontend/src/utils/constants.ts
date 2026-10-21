@@ -312,6 +312,8 @@ export const STORAGE_KEYS = {
   PERMISSIONS: 'mes_permissions',
   /** Zustand persist 持久化键名（authStore 使用） */
   AUTH_STORE: 'mes-auth-store',
+  /** 登录页「记住用户名」 */
+  REMEMBER_USERNAME: 'mes_remember_username',
 } as const;
 
 /** 看板数据刷新间隔（毫秒，30 秒） */

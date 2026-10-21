@@ -247,6 +247,13 @@ async function assignPermissions(roleId, permissionIds) {
     throw error;
   }
 
+  // 系统管理员角色权限固定为「全部权限」，禁止通过接口裁剪（防止把系统锁死）
+  if (existing.code === 'system:admin') {
+    const error = new Error('不允许修改系统管理员角色的权限');
+    error.statusCode = 403;
+    throw error;
+  }
+
   // 检查权限 ID 是否都存在
   const permissions = await prisma.permission.findMany({
     where: { id: { in: permissionIds } },

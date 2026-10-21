@@ -44,7 +44,10 @@
                         └───────────────────────────────────────────────────┘
 ```
 
-端口约定：Nginx `80`（或 `5173` 直用前端开发端口）、后端 `3000`、MySQL `3306`、前端开发服务器 `5173`。
+端口约定：Nginx `80`（或 `5173` 直用前端开发端口）、Node 后端 `3000`、PHP 后端 `8080`、MySQL `3306`、前端开发服务器 `5173`。
+
+> **双后端说明**：`/api/*` 可由 Node 后端（`backend/`，:3000）或 PHP 后端（`php-backend/`，:8080）提供，
+> 两者接口路径、权限码、响应结构、JWT 密钥完全一致，连接同一个数据库，可随时切换（见「第 5 步」）。
 
 ---
 
@@ -52,16 +55,19 @@
 
 | 软件 | 版本 | 说明 |
 |------|------|------|
-| Node.js | >= 18（推荐 22 LTS） | 前端构建 + 后端运行 |
+| Node.js | >= 18（推荐 22 LTS） | 前端构建 + Node 后端运行 |
 | npm | 随 Node（推荐 10+） | 依赖安装（生产用 `npm ci`） |
+| PHP（可选） | >= 7.2（推荐 7.4 / 8.x） | 仅部署 PHP 后端时需要；扩展 `pdo_mysql` / `pdo_sqlite` / `zip` / `mbstring` |
 | 数据库 | 无需安装（SQLite）/ MySQL 8.0+ | 默认 SQLite，仅需文件权限；MySQL 需 utf8mb4 库 |
 | Nginx | 1.18+（可选但推荐） | 静态资源 + API 反代 |
-| PM2 或 NSSM | 最新 | 后端常驻与开机自启 |
+| PM2 或 NSSM | 最新 | Node 后端常驻与开机自启 |
+| Apache 2.4 / PHP-FPM | 最新 | PHP 后端常驻（也可用 `php -S` 做单机演示） |
 
 验证：
 
 ```bash
 node -v && npm -v
+php -v && php -m | findstr /i "pdo_mysql pdo_sqlite zip mbstring"   # 仅 PHP 后端需要
 ```
 
 ---
@@ -179,7 +185,8 @@ server {
 
 后端 `CORS_ORIGIN` 设为前端实际访问来源（如 `http://192.168.1.100`）；同源部署时也可留默认值不影响。
 
-【注意】`backend/src/app.js` 未开启 `trust proxy`，反代后限流会把所有客户端视为同一 IP；如需按真实 IP 限流，请在 `app.js` 中 `const app = express();` 后加 `app.set('trust proxy', 1);`（详见 backend/README.md 第七章）。
+> **反向代理下的真实 IP**：Nginx 前置时请在 `backend/.env.production` 设置 `TRUST_PROXY=true`（已内置支持，无需改代码），
+> 否则限流会把全部客户端视为同一 IP（详见 backend/README.md 第七章）。
 
 防火墙放行（Windows 示例）：
 
@@ -201,11 +208,112 @@ netsh advfirewall firewall add rule name="MES API" dir=in action=allow protocol=
 | 7 | 前端 → API（经 Nginx） | 浏览器登录 `admin/admin123` | 进入看板；浏览器 Network 中 `/api/*` 均为 200 |
 | 8 | 关键模块 | 依次打开 生产排程 / 人员排班 / 工时统计 / OEE 分析 | 页面数据正常，无「参数校验失败」类报错 |
 | 9 | 导出 | OEE 分析页点「导出」 | 下载 xlsx，文件名中文正常 |
-| 10 | 自动化测试（可选） | `npm test`（backend）/ `npm test`（frontend） | 后端 112 用例、前端 52 用例全部通过 |
+| 10 | 自动化测试（可选） | `npm test` / `npm run test:coverage`（两端） | 后端 156 用例、前端 77 用例全部通过，覆盖率门禁通过 |
 | 11 | 权限隔离（可选） | 用 `operator/operator123` 登录 | 看不到系统设置等无权限菜单，越权请求返回 403 |
 | 12 | 备份可用 | `npm run db:backup` | 生成备份文件（SQLite）或 dump 命令（MySQL） |
 
 > 上线后请立即修改默认账号密码（`admin/admin123`、`operator/operator123`），并更换 `JWT_SECRET` / `JWT_REFRESH_SECRET`。
+
+### 第 5 步：PHP 后端部署（可选，与 Node 二选一）
+
+PHP 后端位于 `php-backend/`，实现与 Node 后端**完全相同的 100+ 个接口**（含 OEE、追溯、Excel 导出、RBAC、
+登录锁定、并发扣减、报工幂等等），无需 Node 环境，适合已有 Apache/PHP 主机或无法安装 Node 的现场。
+
+**前置条件**
+
+| 项 | 要求 |
+|----|------|
+| PHP | ≥ 7.2（推荐 7.4 / 8.x），关闭 `display_errors`，开启 `pdo_mysql`（MySQL）或 `pdo_sqlite`（SQLite） |
+| 扩展 | `zip`（Excel 导出必需）、`mbstring`、`json`、`openssl` |
+| 数据库 | 已由 Node 侧执行过 `npm run db:setup:all`（PHP **不建表**，只读写同一个库） |
+| 配置 | `php-backend/.env`（可选）。未创建时自动读取 `backend/.env`，从而共用数据库与 JWT 密钥 |
+| 目录权限 | `php-backend/runtime/` 可写（限流、登录锁定、日志、启动时间） |
+
+**方式 A：单机演示 / 内网小规模（PHP 内置服务器）**
+
+```bat
+cd php-backend
+start.bat
+:: 或
+php -S 0.0.0.0:8080 -t public public/index.php
+:: SQLite 且 php.ini 未启用 pdo_sqlite 时
+php -d extension=pdo_sqlite -S 0.0.0.0:8080 -t public public/index.php
+```
+
+**方式 B：Apache（推荐 Windows + Apache 现场）**
+
+1. Apache 站点 `DocumentRoot` 指向 `php-backend/public`；
+2. 确认 `mod_rewrite` 已启用（仓库已内置 `public/.htaccess`）；
+3. 将 `php-backend` 目录授予 Apache 运行账号读取权限，`runtime/` 授予写权限；
+4. 若使用 SQLite，`backend/prisma/*.db` 所在目录需授予读写权限。
+
+**方式 C：Nginx + PHP-FPM**
+
+```nginx
+server {
+    listen 8080;
+    root  /path/to/php-backend/public;
+
+    location /api/ {
+        include        fastcgi_params;
+        fastcgi_param  SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param  SCRIPT_NAME     /index.php;
+        fastcgi_param  REQUEST_URI     $request_uri;
+        fastcgi_pass   127.0.0.1:9000;
+    }
+}
+```
+
+**启动后验证**
+
+```bash
+curl http://127.0.0.1:8080/api/health
+curl -X POST http://127.0.0.1:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"admin\",\"password\":\"admin123\"}"
+```
+
+`/api/health` 应返回 `status: ok`、`database.connected: true`，且 `service.node` 为 `PHP x.y.z`。
+
+**切换前端到 PHP 后端（无需重新构建）**
+
+```bat
+:: 默认切到 http://127.0.0.1:8080/api
+switch-backend.bat php
+
+:: PHP 与前端不同机时指定地址（需同步修改 php-backend/.env 的 CORS_ORIGIN）
+switch-backend.bat php http://192.168.1.100:8080/api
+
+:: 回切 Node 后端
+switch-backend.bat node
+```
+
+也可直接编辑部署目录下的 `frontend/dist/config.js`：`API_BASE_URL: 'http://<PHP服务器>:8080/api'`，
+保存后浏览器 `Ctrl+F5`。切换只影响请求地址，不迁移、不修改任何业务数据。
+
+**PHP 后端上线检查清单**
+
+| # | 检查项 | 期望结果 |
+|---|--------|----------|
+| 1 | `GET /api/health` | 200，`database.connected=true`，`database.type` 与实际库一致 |
+| 2 | 登录 `admin/admin123` | 返回 `token` + `permissions`（管理员 109 项） |
+| 3 | Token 互通 | 用 Node 签发的 Token 请求 PHP `/api/auth/profile`，返回同一用户（反之亦然） |
+| 4 | 七大模块列表 | 生产 / 排程 / 设备 / 维保 / 故障 / 质量 / 物料 / 人员 / 报表均无 500 |
+| 5 | OEE 汇总 | 与 Node 后端同一时间范围结果一致 |
+| 6 | 报工幂等 | 同一 `requestId` 重复提交返回同一条记录，超量报工返回 400 |
+| 7 | 库存扣减 | 出库量 > 库存返回 400，库存不为负 |
+| 8 | 排程冲突 | 同设备重叠时段返回 409，响应 `data.conflicts` 非空 |
+| 9 | Excel 导出 | OEE / 生产 / 质量 / 库存 / 工时 5 类文件均可下载并用 Excel 打开 |
+| 10 | 越权访问 | `operator/operator123` 访问系统设置接口返回 403 |
+| 11 | 登录锁定 | 同一账号连续 5 次密码错误后返回 429（15 分钟后自动解锁） |
+| 12 | 回切验证 | `switch-backend.bat node` 后刷新页面，系统仍正常可用 |
+
+> PHP 后端注意事项：
+> 1. 登录锁定与限流使用 `php-backend/runtime/state.json`（文件锁），**多实例/多机部署需替换为 Redis 等集中存储**；
+> 2. PHP 不做数据库迁移，升级表结构仍由 Node 侧 Prisma 执行，执行后再启动 PHP 即可；
+> 3. PHP 端 `JWT_SECRET` 必须与 Node 端一致，否则切换后旧 Token 失效（重新登录即可）；
+> 4. 生产环境务必设置 `NODE_ENV=production`，避免异常细节回显到响应；
+> 5. 若使用 SQLite，请确保 Web 进程与 Node 进程不会同时长时间持有写事务（SQLite 单写者模型）。
 
 ---
 
@@ -300,4 +408,61 @@ mysql -u mes_user -p mes_workshop < mes_workshop-<时间戳>.sql
 
 ---
 
-*最后更新：2026-09-17（部署总览；细节以 backend/README.md、backend/docs/DATABASE.md、frontend/README.md 为准）*
+## 十、前后端异地独立部署（推荐拓扑 B）
+
+适用场景：已有前端静态站点服务器（Nginx/IIS/对象存储），后端单独跑在应用服务器或容器平台。
+两端**只通过 HTTP API 通信**，无构建期/运行期文件依赖。
+
+```
+┌────────────────────────────┐            ┌──────────────────────────────┐
+│ 前端服务器（任意静态托管）  │            │ 后端服务器（Node.js 22）      │
+│  http://192.168.1.101      │  /api/*    │  http://192.168.1.100:3000    │
+│  dist/（含 config.js）      │ ─────────► │  Express + Prisma            │
+└────────────────────────────┘   跨域     └───────────────┬──────────────┘
+                                                          │
+                                                   SQLite / MySQL
+```
+
+### 10.1 后端侧配置（`backend/.env.production`）
+
+```ini
+NODE_ENV=production
+HOST=0.0.0.0                 # 允许前端服务器/车间终端访问
+PORT=3000
+CORS_ORIGIN=http://192.168.1.101   # 前端实际访问地址（多个用逗号分隔，需带协议与端口）
+TRUST_PROXY=true                    # 若后端前还有 Nginx 则设为 true
+DB_TYPE=sqlite                      # 或 mysql
+JWT_SECRET=<强随机值>
+JWT_REFRESH_SECRET=<另一个强随机值>
+```
+
+启动：`npm run db:setup` → `npm start`（或 `deploy/start-backend.bat` / PM2）。
+验证：`curl http://192.168.1.100:3000/api/health` 返回 `service.version` 与 `database.connected: true`。
+
+### 10.2 前端侧配置（部署后改 `dist/config.js`，无需重新构建）
+
+```js
+window.__MES_CONFIG__ = {
+  API_BASE_URL: 'http://192.168.1.100:3000/api',
+  APP_TITLE: 'MES 车间制造执行系统',
+  BASE_PATH: '',
+};
+```
+
+同机 Nginx 反代场景则保持 `API_BASE_URL: ''`（沿用构建期的 `/api`）。
+改完强制刷新浏览器（Ctrl+F5）即可；登录页会显示当前 API 地址与连接状态。
+
+### 10.3 子路径部署（如 `http://host/mes/`）
+
+1. 构建：`VITE_BASE_PATH=/mes/ npm run build`（Windows：`set VITE_BASE_PATH=/mes/ && npm run build`）
+2. 部署后 `config.js`：`BASE_PATH: '/mes/'`，`API_BASE_URL: '/mes/api'`（若 Nginx 按此路径反代）
+3. Nginx 增加 `location /mes/api/ { proxy_pass http://127.0.0.1:3000/api/; }` 与 `location /mes/ { alias .../dist/; try_files $uri $uri/ /mes/index.html; }`
+
+### 10.4 排障入口（现场无需登录服务器）
+
+登录页会实时探测 `/api/health` 并显示接口地址；登录后右上角用户菜单 →「系统信息」可查看：
+前端版本、API 地址、部署基路径、后端版本/环境/Node 版本、数据库类型与连通延迟、服务运行时长。
+
+---
+
+*最后更新：2026-10-21（部署总览；细节以 backend/README.md、backend/docs/DATABASE.md、frontend/README.md 为准）*

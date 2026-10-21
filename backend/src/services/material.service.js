@@ -597,7 +597,7 @@ async function createTransaction(data, operatorId) {
     throw error;
   }
 
-  // 出库时检查库存是否充足
+  // 出库时先做一次「可读性友好」的快速失败（最终一致性由事务内的条件扣减保证）
   if (data.transactionType === 'out') {
     if (Number(material.inventory.quantity) < data.quantity) {
       const error = new Error(
@@ -608,10 +608,31 @@ async function createTransaction(data, operatorId) {
     }
   }
 
-  // 使用事务：创建出入库记录 + 更新库存数量
+  // 事务：库存条件扣减 + 创建流水（任一失败整体回滚）
   const transaction = await prisma.$transaction(async (tx) => {
+    if (data.transactionType === 'out') {
+      // 原子扣减：WHERE quantity >= 出库量，避免「先查后扣」的并发负库存
+      const deducted = await tx.inventory.updateMany({
+        where: {
+          materialId: data.materialId,
+          quantity: { gte: data.quantity },
+        },
+        data: { quantity: { decrement: data.quantity } },
+      });
+      if (deducted.count === 0) {
+        const error = new Error('库存不足：并发操作导致库存已变化，请刷新后重试');
+        error.statusCode = 400;
+        throw error;
+      }
+    } else {
+      await tx.inventory.updateMany({
+        where: { materialId: data.materialId },
+        data: { quantity: { increment: data.quantity } },
+      });
+    }
+
     // 创建出入库流水记录
-    const record = await tx.inventoryTransaction.create({
+    return tx.inventoryTransaction.create({
       data: {
         materialId: data.materialId,
         transactionType: data.transactionType,
@@ -622,18 +643,6 @@ async function createTransaction(data, operatorId) {
         remark: data.remark || '',
       },
     });
-
-    // 更新库存数量
-    const delta =
-      data.transactionType === 'in' ? data.quantity : -data.quantity;
-    await tx.inventory.update({
-      where: { materialId: data.materialId },
-      data: {
-        quantity: { increment: delta },
-      },
-    });
-
-    return record;
   });
 
   return transaction;

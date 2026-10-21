@@ -1,0 +1,16 @@
+# MES 系统 - Apache 重写规则（DocumentRoot 指向 php-backend/public）
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Apache 默认可能丢弃 Authorization 头，显式透传给 PHP（JWT 认证必需）
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # 静态文件直接返回，其余全部交给 index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# 禁止目录浏览
+Options -Indexes

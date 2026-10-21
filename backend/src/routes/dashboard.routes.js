@@ -1,17 +1,18 @@
 /**
  * MES 系统 - 数据看板路由
  * 路由：看板总览、工单进度、设备状态、产量趋势、质量摘要
- * 所有路由需要 authMiddleware 认证（登录即可访问，不限定具体权限）
+ * 权限：登录认证 + dashboard:view（与前端菜单权限码一致，避免"登录即可看全厂数据"）
  */
 
 const express = require('express');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const dashboardController = require('../controllers/dashboard.controller');
 
 const router = express.Router();
 
-// 所有看板路由都需要登录认证
+// 所有看板路由都需要登录认证 + 看板查看权限
 router.use(authMiddleware);
+router.use(requirePermission('dashboard:view'));
 
 /**
  * GET /api/dashboard/overview

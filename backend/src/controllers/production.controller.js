@@ -132,7 +132,7 @@ async function transitionStatus(req, res, next) {
 async function createReport(req, res, next) {
   try {
     const { id } = req.params;
-    const { completedQty, defectQty, remark } = req.body;
+    const { completedQty, defectQty, remark, requestId } = req.body;
     const operatorId = req.user?.userId;
     const report = await productionService.createReport(
       Number(id),
@@ -140,6 +140,7 @@ async function createReport(req, res, next) {
       defectQty,
       operatorId,
       remark,
+      requestId,
     );
     return sendCreated(res, report, '报工成功');
   } catch (error) {

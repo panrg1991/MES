@@ -77,6 +77,8 @@ export interface CreateReportRequest {
   completedQty: number;
   defectQty?: number;
   remark?: string;
+  /** 幂等键：同一次提交的重试携带相同值，后端只会累加一次 */
+  requestId?: string;
 }
 
 /**

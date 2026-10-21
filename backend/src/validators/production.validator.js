@@ -77,6 +77,13 @@ const createReportSchema = z.object({
     .optional()
     .default(0),
   remark: z.string().max(500, '备注最多 500 个字符').optional().default(''),
+  // 客户端幂等键：同一次提交重试时携带相同值，可避免重复报工
+  requestId: z
+    .string()
+    .trim()
+    .min(8, 'requestId 至少 8 个字符')
+    .max(64, 'requestId 最多 64 个字符')
+    .optional(),
 });
 
 /** ID 参数 Schema */

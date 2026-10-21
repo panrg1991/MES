@@ -13,7 +13,11 @@ const { sendSuccess, sendError } = require('../utils/response');
 async function login(req, res, next) {
   try {
     const { username, password } = req.body;
-    const result = await authService.login(username, password);
+    // 传递请求上下文：登录审计日志需要 requestId 与来源 IP（不记录密码）
+    const result = await authService.login(username, password, {
+      requestId: req.id,
+      ip: req.ip,
+    });
     return sendSuccess(res, result, '登录成功');
   } catch (error) {
     if (error.statusCode) {

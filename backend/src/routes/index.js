@@ -9,17 +9,21 @@
  */
 
 const express = require('express');
+const packageInfo = require('../../package.json');
 
 const router = express.Router();
 
 /**
  * 健康检查路由
  * GET /api/health
- * 附带当前数据库类型（dbType）与连通性，便于验证「动态数据库配置」是否生效
+ * 附带服务版本/运行环境/数据库类型与连通性：
+ *   ① 运维探活（Nginx / PM2 / Docker HEALTHCHECK / 监控系统）
+ *   ② 前端「系统信息」与登录页连通性检测直接消费本接口
+ *   ③ 验证「动态数据库配置」是否生效
  */
 router.get('/health', async (req, res) => {
   const { checkDatabaseHealth } = require('../config/database');
-  const { config } = require('../config/env');
+  const { config, hasInsecureSecrets } = require('../config/env');
 
   const dbHealth = await checkDatabaseHealth();
   const healthy = dbHealth.connected;
@@ -30,12 +34,20 @@ router.get('/health', async (req, res) => {
       status: healthy ? 'ok' : 'degraded',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      service: {
+        name: packageInfo.name,
+        version: packageInfo.version,
+        env: config.nodeEnv,
+        node: process.version,
+      },
       database: {
         type: config.dbType,
         connected: dbHealth.connected,
         latencyMs: dbHealth.latencyMs,
         error: dbHealth.error,
       },
+      // 安全提示：生产环境仍使用默认 JWT 密钥时为 true，前端/监控可据此告警
+      insecureSecrets: hasInsecureSecrets(),
     },
     message: healthy ? '服务运行正常' : '服务运行异常：数据库连接失败',
   });

@@ -208,3 +208,30 @@ describe('POST /api/auth/logout - 登出', () => {
     expect(res.body.code).toBe(200);
   });
 });
+
+describe('登录暴破防护（P0）', () => {
+  test('同一账号连续失败 5 次后临时锁定，返回 429', async () => {
+    const username = `lockout-${Date.now()}`;
+
+    for (let i = 0; i < 5; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ username, password: 'wrong-password' });
+      expect(res.status).toBe(401);
+    }
+
+    const blocked = await request(app)
+      .post('/api/auth/login')
+      .send({ username, password: 'wrong-password' });
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.message).toContain('锁定');
+  });
+
+  test('锁定只影响该账号，管理员仍可正常登录', async () => {
+    const res = await request(app).post('/api/auth/login').send(ADMIN_CREDENTIALS);
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.data.token).toBe('string');
+  });
+});

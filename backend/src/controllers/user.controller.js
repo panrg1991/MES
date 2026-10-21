@@ -86,7 +86,12 @@ async function toggleStatus(req, res, next) {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    const user = await userService.toggleStatus(Number(id), status);
+    // 传入操作人 ID：阻止停用当前登录账号 / 最后一个管理员
+    const user = await userService.toggleStatus(
+      Number(id),
+      status,
+      req.user?.userId,
+    );
     return sendSuccess(res, user, status ? '已启用' : '已停用');
   } catch (error) {
     if (error.statusCode) {
@@ -121,7 +126,8 @@ async function resetPassword(req, res, next) {
 async function deleteUser(req, res, next) {
   try {
     const { id } = req.params;
-    await userService.deleteUser(Number(id));
+    // 传入操作人 ID：阻止删除当前登录账号 / 最后一个管理员
+    await userService.deleteUser(Number(id), req.user?.userId);
     return sendSuccess(res, null, '删除用户成功');
   } catch (error) {
     if (error.statusCode) {

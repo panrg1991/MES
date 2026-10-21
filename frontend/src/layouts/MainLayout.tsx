@@ -34,10 +34,13 @@ import {
   UserOutlined,
   TeamOutlined,
   BarChartOutlined,
+  KeyOutlined,
+  InfoCircleOutlined,
 } from '@ant-design/icons';
 import { Dropdown, Avatar, message, MenuProps } from 'antd';
 import { useAuthStore } from '@/stores/authStore';
 import PageLoading from '@/components/common/PageLoading';
+import SystemInfoModal from '@/components/common/SystemInfoModal';
 
 /**
  * 菜单项配置
@@ -271,6 +274,8 @@ function MainLayout() {
   const location = useLocation();
   const { user, clearAuth, hasPermission, permissions } = useAuthStore();
   const [collapsed, setCollapsed] = useState(false);
+  /** 系统信息弹窗（排障用：显示 API 地址与后端/数据库连通状态） */
+  const [systemInfoOpen, setSystemInfoOpen] = useState(false);
 
   /** 侧边栏菜单滚动位置（切换页面时恢复，避免每次都要重新滑动） */
   const siderScrollTopRef = useRef(0);
@@ -367,8 +372,21 @@ function MainLayout() {
     navigate('/login', { replace: true });
   };
 
-  /** 用户下拉菜单项 */
+  /** 用户下拉菜单项：修改密码 / 系统信息 / 退出登录 */
   const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'change-password',
+      icon: <KeyOutlined />,
+      label: '修改密码',
+      onClick: () => navigate('/system/settings'),
+    },
+    {
+      key: 'system-info',
+      icon: <InfoCircleOutlined />,
+      label: '系统信息',
+      onClick: () => setSystemInfoOpen(true),
+    },
+    { type: 'divider' },
     {
       key: 'logout',
       icon: <LogoutOutlined />,
@@ -454,6 +472,12 @@ function MainLayout() {
       <Suspense fallback={<PageLoading />}>
         <Outlet />
       </Suspense>
+
+      {/* 系统信息弹窗：现场排障时快速确认 API 地址与后端/数据库状态 */}
+      <SystemInfoModal
+        open={systemInfoOpen}
+        onClose={() => setSystemInfoOpen(false)}
+      />
     </ProLayout>
   );
 }

@@ -18,10 +18,10 @@
     然后 `iisreset` 或在 IIS 管理器中重启站点。
 
   ⚠️ 与 Nginx 方案的关键差异：
-    IIS 自身不做 /api 反向代理，需要额外安装 ARR（Application Request Routing）并
-    开启代理，见文件末尾「可选：ARR 反向代理」段。若内网已有 Nginx 承担 /api 转发，
-    可只让 IIS 托管静态资源，API 交给 Nginx（此时前端 .env.production 的
-    VITE_API_BASE_URL 需指向 Nginx 的同源 /api 或后端绝对地址，改完必须重新 build）。
+  IIS 自身不做 /api 反向代理，需要额外安装 ARR（Application Request Routing）并
+  开启代理，见文件末尾「可选：ARR 反向代理」段。若内网已有 Nginx 承担 /api 转发，
+  可只让 IIS 托管静态资源，API 交给 Nginx（此时**直接修改 dist/config.js 的
+  API_BASE_URL** 指向 Nginx 的同源 /api 或后端绝对地址即可，无需重新构建）。
   ============================================================================
 -->
 <configuration>
@@ -122,6 +122,22 @@
         <customHeaders>
           <add name="Cache-Control" value="no-cache, no-store, must-revalidate" />
           <add name="Pragma" value="no-cache" />
+        </customHeaders>
+      </httpProtocol>
+    </system.webServer>
+  </location>
+
+  <!-- ========================================================================
+       运行时配置 config.js：部署后可修改（切换后端地址），必须禁止缓存
+       ======================================================================== -->
+  <location path="config.js">
+    <system.webServer>
+      <staticContent>
+        <clientCache cacheControlMode="DisableCache" />
+      </staticContent>
+      <httpProtocol>
+        <customHeaders>
+          <add name="Cache-Control" value="no-cache, no-store, must-revalidate" />
         </customHeaders>
       </httpProtocol>
     </system.webServer>

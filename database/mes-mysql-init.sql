@@ -115,7 +115,8 @@ CREATE TABLE IF NOT EXISTS `users` (
   `createdAt`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP   COMMENT '创建时间',
   `updatedAt`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_users_username` (`username`)
+  UNIQUE KEY `uk_users_username` (`username`),
+  KEY `idx_users_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户账号表';
 
 -- 1.2 角色定义表
@@ -128,7 +129,8 @@ CREATE TABLE IF NOT EXISTS `roles` (
   `createdAt`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP   COMMENT '创建时间',
   `updatedAt`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_roles_code` (`code`)
+  UNIQUE KEY `uk_roles_code` (`code`),
+  KEY `idx_roles_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='角色定义表';
 
 -- 1.3 权限表（菜单/按钮，自关联形成权限树）
@@ -214,6 +216,8 @@ CREATE TABLE IF NOT EXISTS `work_orders` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_work_orders_orderNo` (`orderNo`),
   KEY `idx_work_orders_workshopId` (`workshopId`),
+  KEY `idx_work_orders_status_createdAt` (`status`, `createdAt`),
+  KEY `idx_work_orders_productCode` (`productCode`),
   CONSTRAINT `fk_work_orders_workshopId`
     FOREIGN KEY (`workshopId`) REFERENCES `workshops` (`id`)
     ON DELETE SET NULL ON UPDATE CASCADE
@@ -228,9 +232,12 @@ CREATE TABLE IF NOT EXISTS `production_reports` (
   `operatorId`   BIGINT       NULL     DEFAULT NULL              COMMENT '报工操作员 ID',
   `reportTime`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '报工时间',
   `remark`       VARCHAR(500) NOT NULL DEFAULT ''                COMMENT '备注',
+  `requestId`    VARCHAR(191) NULL                               COMMENT '客户端幂等键（同一次提交的重试只落一条，可空）',
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_production_reports_requestId` (`requestId`),
   KEY `idx_production_reports_workOrderId` (`workOrderId`),
   KEY `idx_production_reports_operatorId` (`operatorId`),
+  KEY `idx_production_reports_reportTime` (`reportTime`),
   CONSTRAINT `fk_production_reports_workOrderId`
     FOREIGN KEY (`workOrderId`) REFERENCES `work_orders` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -251,6 +258,7 @@ CREATE TABLE IF NOT EXISTS `work_order_status_logs` (
   PRIMARY KEY (`id`),
   KEY `idx_wosl_workOrderId` (`workOrderId`),
   KEY `idx_wosl_operatorId` (`operatorId`),
+  KEY `idx_wosl_workOrder_changedAt` (`workOrderId`, `changedAt`),
   CONSTRAINT `fk_wosl_workOrderId`
     FOREIGN KEY (`workOrderId`) REFERENCES `work_orders` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -277,6 +285,7 @@ CREATE TABLE IF NOT EXISTS `equipment` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_equipment_code` (`code`),
   KEY `idx_equipment_workshopId` (`workshopId`),
+  KEY `idx_equipment_status` (`status`),
   CONSTRAINT `fk_equipment_workshopId`
     FOREIGN KEY (`workshopId`) REFERENCES `workshops` (`id`)
     ON DELETE SET NULL ON UPDATE CASCADE
@@ -299,6 +308,7 @@ CREATE TABLE IF NOT EXISTS `production_schedules` (
   KEY `idx_production_schedules_equipmentId` (`equipmentId`),
   -- P1 复合索引：覆盖「同设备时段重叠」冲突检测查询
   KEY `idx_production_schedules_equipment_time` (`equipmentId`, `plannedStart`, `plannedEnd`),
+  KEY `idx_production_schedules_status` (`status`),
   CONSTRAINT `fk_production_schedules_workOrderId`
     FOREIGN KEY (`workOrderId`) REFERENCES `work_orders` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -325,6 +335,8 @@ CREATE TABLE IF NOT EXISTS `equipment_status_logs` (
   PRIMARY KEY (`id`),
   KEY `idx_esl_equipmentId` (`equipmentId`),
   KEY `idx_esl_changedById` (`changedById`),
+  KEY `idx_esl_equipment_changedAt` (`equipmentId`, `changedAt`),
+  KEY `idx_esl_changedAt` (`changedAt`),
   CONSTRAINT `fk_esl_equipmentId`
     FOREIGN KEY (`equipmentId`) REFERENCES `equipment` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -346,6 +358,8 @@ CREATE TABLE IF NOT EXISTS `maintenance_plans` (
   `updatedAt`   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   KEY `idx_maintenance_plans_equipmentId` (`equipmentId`),
+  KEY `idx_maintenance_plans_nextDate` (`nextDate`),
+  KEY `idx_maintenance_plans_status` (`status`),
   CONSTRAINT `fk_maintenance_plans_equipmentId`
     FOREIGN KEY (`equipmentId`) REFERENCES `equipment` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE
@@ -367,6 +381,7 @@ CREATE TABLE IF NOT EXISTS `maintenance_records` (
   KEY `idx_maintenance_records_planId` (`planId`),
   KEY `idx_maintenance_records_equipmentId` (`equipmentId`),
   KEY `idx_maintenance_records_maintainerId` (`maintainerId`),
+  KEY `idx_maintenance_records_equipment_startTime` (`equipmentId`, `startTime`),
   CONSTRAINT `fk_maintenance_records_planId`
     FOREIGN KEY (`planId`) REFERENCES `maintenance_plans` (`id`)
     ON DELETE SET NULL ON UPDATE CASCADE,
@@ -421,6 +436,9 @@ CREATE TABLE IF NOT EXISTS `quality_inspections` (
   PRIMARY KEY (`id`),
   KEY `idx_quality_inspections_workOrderId` (`workOrderId`),
   KEY `idx_quality_inspections_inspectorId` (`inspectorId`),
+  KEY `idx_quality_inspections_workOrder_time` (`workOrderId`, `inspectionTime`),
+  KEY `idx_quality_inspections_inspectionTime` (`inspectionTime`),
+  KEY `idx_quality_inspections_result` (`result`),
   CONSTRAINT `fk_quality_inspections_workOrderId`
     FOREIGN KEY (`workOrderId`) REFERENCES `work_orders` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -464,6 +482,7 @@ CREATE TABLE IF NOT EXISTS `defect_records` (
   KEY `idx_defect_records_workOrderId` (`workOrderId`),
   KEY `idx_defect_records_equipmentId` (`equipmentId`),
   KEY `idx_defect_records_handledBy` (`handledBy`),
+  KEY `idx_defect_records_createdAt` (`createdAt`),
   CONSTRAINT `fk_defect_records_workOrderId`
     FOREIGN KEY (`workOrderId`) REFERENCES `work_orders` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -492,7 +511,9 @@ CREATE TABLE IF NOT EXISTS `materials` (
   `createdAt`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP   COMMENT '创建时间',
   `updatedAt`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_materials_code` (`code`)
+  UNIQUE KEY `uk_materials_code` (`code`),
+  KEY `idx_materials_type` (`type`),
+  KEY `idx_materials_category` (`category`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='物料主数据表';
 
 -- 5.2 物料清单（BOM）表
@@ -505,7 +526,9 @@ CREATE TABLE IF NOT EXISTS `boms` (
   `remark`      VARCHAR(500) NOT NULL DEFAULT ''                  COMMENT '备注',
   `createdAt`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP   COMMENT '创建时间',
   `updatedAt`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_boms_productCode` (`productCode`),
+  KEY `idx_boms_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='物料清单（BOM）表';
 
 -- 5.3 BOM 明细表
@@ -539,6 +562,7 @@ CREATE TABLE IF NOT EXISTS `inventory` (
   `updatedAt`   DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_inventory_materialId` (`materialId`),
+  KEY `idx_inventory_updatedAt` (`updatedAt`),
   CONSTRAINT `fk_inventory_materialId`
     FOREIGN KEY (`materialId`) REFERENCES `materials` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE
@@ -560,6 +584,8 @@ CREATE TABLE IF NOT EXISTS `inventory_transactions` (
   KEY `idx_inventory_transactions_operatorId` (`operatorId`),
   -- P1 索引：批次号高频查询（质量追溯 / 物料追溯链路）
   KEY `idx_inventory_transactions_batchNo` (`batchNo`),
+  KEY `idx_inventory_transactions_material_time` (`materialId`, `transactionTime`),
+  KEY `idx_inventory_transactions_transactionTime` (`transactionTime`),
   CONSTRAINT `fk_inventory_transactions_materialId`
     FOREIGN KEY (`materialId`) REFERENCES `materials` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -581,6 +607,8 @@ CREATE TABLE IF NOT EXISTS `material_batches` (
   `updatedAt`    DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   KEY `idx_material_batches_materialId` (`materialId`),
+  KEY `idx_material_batches_batchNo` (`batchNo`),
+  KEY `idx_material_batches_createdAt` (`createdAt`),
   CONSTRAINT `fk_material_batches_materialId`
     FOREIGN KEY (`materialId`) REFERENCES `materials` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE
@@ -616,6 +644,7 @@ CREATE TABLE IF NOT EXISTS `personnel_schedules` (
   -- P1 唯一约束：同人 + 同日 + 同班次不可重复排班
   UNIQUE KEY `uk_personnel_schedules_user_date_shift` (`userId`, `scheduleDate`, `shiftId`),
   KEY `idx_personnel_schedules_shiftId` (`shiftId`),
+  KEY `idx_personnel_schedules_scheduleDate` (`scheduleDate`),
   CONSTRAINT `fk_personnel_schedules_userId`
     FOREIGN KEY (`userId`) REFERENCES `users` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -640,6 +669,8 @@ CREATE TABLE IF NOT EXISTS `work_hours_records` (
   KEY `idx_work_hours_records_userId` (`userId`),
   KEY `idx_work_hours_records_workOrderId` (`workOrderId`),
   KEY `idx_work_hours_records_shiftId` (`shiftId`),
+  KEY `idx_work_hours_records_user_workDate` (`userId`, `workDate`),
+  KEY `idx_work_hours_records_workDate` (`workDate`),
   CONSTRAINT `fk_work_hours_records_userId`
     FOREIGN KEY (`userId`) REFERENCES `users` (`id`)
     ON DELETE SET NULL ON UPDATE CASCADE,

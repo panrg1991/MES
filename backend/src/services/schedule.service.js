@@ -4,13 +4,22 @@
  * 关键业务口径（架构文档 §4.3、§8.5）：
  *  ① 冲突判定：同一 equipmentId 下 `newStart < otherEnd && otherStart < newEnd` 即冲突；
  *     **端点相接（newStart == otherEnd）不冲突**；status === 'cancelled' 不参与冲突检测
- *  ② 冲突校验前后端双做：前端本地预判即时反馈，后端事务内复检（检出 → 409 并返回冲突明细）
+ *  ② 冲突校验前后端双做：前端本地预判即时反馈；后端在进程内互斥区内复检再写入
+ *     （单实例部署下可防并发重叠；多实例部署需改用数据库行锁/分布式锁）
  *  ③ 时间窗默认值：未传 startDate/endDate 时取「今天起 14 天」
  *  ④ equipmentId 为空的排程（未指定设备）不参与冲突检测
  *  ⑤ 支持按 workOrderId 查询（工单详情页「生产排程」区块消费），此时不施加默认时间窗
  */
 
 const { prisma } = require('../config/database');
+const { runExclusive } = require('../utils/mutex');
+
+/**
+ * 排程写操作互斥键
+ * 说明：冲突检测是「区间重叠」判断，无法用数据库唯一约束表达；
+ *      这里用全局串行（排程写入频率低）保证「检测 + 写入」原子，避免同设备并发插入重叠时段。
+ */
+const SCHEDULE_LOCK_KEY = 'production-schedule';
 
 /**
  * 排程状态流转规则（状态机）
@@ -172,51 +181,53 @@ async function checkConflicts(params) {
 async function createSchedule(data) {
   const { workOrderId, equipmentId, plannedStart, plannedEnd } = data;
 
-  // 前置存在性校验（404 友好提示，避免外键错误 500）
-  const [workOrder, equipment] = await Promise.all([
-    prisma.workOrder.findUnique({ where: { id: workOrderId } }),
-    equipmentId
-      ? prisma.equipment.findUnique({ where: { id: equipmentId } })
-      : Promise.resolve(null),
-  ]);
-  if (!workOrder) {
-    throw createBusinessError('工单不存在', 404);
-  }
-  if (equipmentId && !equipment) {
-    throw createBusinessError('设备不存在', 404);
-  }
-
-  const result = await prisma.$transaction(async (tx) => {
-    // 冲突复检（事务内，防并发窗口）
-    if (equipmentId) {
-      const conflicts = await findOverlappingSchedules({
-        client: tx,
-        equipmentId,
-        plannedStart,
-        plannedEnd,
-      });
-      if (conflicts.length > 0) {
-        throw createBusinessError(
-          `排程冲突：与工单 ${conflicts.map((c) => c.workOrder?.orderNo || c.id).join('、')} 在同一设备时段重叠`,
-          409,
-          conflicts,
-        );
-      }
+  return runExclusive(SCHEDULE_LOCK_KEY, async () => {
+    // 前置存在性校验（404 友好提示，避免外键错误 500）
+    const [workOrder, equipment] = await Promise.all([
+      prisma.workOrder.findUnique({ where: { id: workOrderId } }),
+      equipmentId
+        ? prisma.equipment.findUnique({ where: { id: equipmentId } })
+        : Promise.resolve(null),
+    ]);
+    if (!workOrder) {
+      throw createBusinessError('工单不存在', 404);
+    }
+    if (equipmentId && !equipment) {
+      throw createBusinessError('设备不存在', 404);
     }
 
-    return tx.productionSchedule.create({
-      data: {
-        workOrderId,
-        equipmentId: equipmentId || null,
-        plannedStart,
-        plannedEnd,
-        status: 'planned',
-      },
-      include: SCHEDULE_INCLUDE,
-    });
-  });
+    const result = await prisma.$transaction(async (tx) => {
+      // 冲突复检（与写入同处互斥区，单进程内原子）
+      if (equipmentId) {
+        const conflicts = await findOverlappingSchedules({
+          client: tx,
+          equipmentId,
+          plannedStart,
+          plannedEnd,
+        });
+        if (conflicts.length > 0) {
+          throw createBusinessError(
+            `排程冲突：与工单 ${conflicts.map((c) => c.workOrder?.orderNo || c.id).join('、')} 在同一设备时段重叠`,
+            409,
+            conflicts,
+          );
+        }
+      }
 
-  return result;
+      return tx.productionSchedule.create({
+        data: {
+          workOrderId,
+          equipmentId: equipmentId || null,
+          plannedStart,
+          plannedEnd,
+          status: 'planned',
+        },
+        include: SCHEDULE_INCLUDE,
+      });
+    });
+
+    return result;
+  });
 }
 
 /**
@@ -226,52 +237,54 @@ async function createSchedule(data) {
  * @returns {Promise<{schedule: object, conflicts: Array}>}
  */
 async function updateSchedule(id, data) {
-  const existing = await prisma.productionSchedule.findUnique({ where: { id } });
-  if (!existing) {
-    throw createBusinessError('排程不存在', 404);
-  }
-
-  // 合并字段：未传字段沿用原值
-  const equipmentId =
-    data.equipmentId !== undefined ? data.equipmentId || null : existing.equipmentId;
-  const plannedStart = data.plannedStart || existing.plannedStart;
-  const plannedEnd = data.plannedEnd || existing.plannedEnd;
-
-  if (plannedStart >= plannedEnd) {
-    throw createBusinessError('计划开始时间必须早于计划结束时间', 400);
-  }
-
-  const result = await prisma.$transaction(async (tx) => {
-    // 冲突复检（事务内，排除自身；cancelled 不参与冲突）
-    if (equipmentId) {
-      const conflicts = await findOverlappingSchedules({
-        client: tx,
-        equipmentId,
-        plannedStart,
-        plannedEnd,
-        excludeId: id,
-      });
-      if (conflicts.length > 0) {
-        throw createBusinessError(
-          `排程冲突：与工单 ${conflicts.map((c) => c.workOrder?.orderNo || c.id).join('、')} 在同一设备时段重叠`,
-          409,
-          conflicts,
-        );
-      }
+  return runExclusive(SCHEDULE_LOCK_KEY, async () => {
+    const existing = await prisma.productionSchedule.findUnique({ where: { id } });
+    if (!existing) {
+      throw createBusinessError('排程不存在', 404);
     }
 
-    return tx.productionSchedule.update({
-      where: { id },
-      data: {
-        equipmentId,
-        plannedStart,
-        plannedEnd,
-      },
-      include: SCHEDULE_INCLUDE,
-    });
-  });
+    // 合并字段：未传字段沿用原值
+    const equipmentId =
+      data.equipmentId !== undefined ? data.equipmentId || null : existing.equipmentId;
+    const plannedStart = data.plannedStart || existing.plannedStart;
+    const plannedEnd = data.plannedEnd || existing.plannedEnd;
 
-  return { schedule: result, conflicts: [] };
+    if (plannedStart >= plannedEnd) {
+      throw createBusinessError('计划开始时间必须早于计划结束时间', 400);
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 冲突复检（与写入同处互斥区，排除自身；cancelled 不参与冲突）
+      if (equipmentId) {
+        const conflicts = await findOverlappingSchedules({
+          client: tx,
+          equipmentId,
+          plannedStart,
+          plannedEnd,
+          excludeId: id,
+        });
+        if (conflicts.length > 0) {
+          throw createBusinessError(
+            `排程冲突：与工单 ${conflicts.map((c) => c.workOrder?.orderNo || c.id).join('、')} 在同一设备时段重叠`,
+            409,
+            conflicts,
+          );
+        }
+      }
+
+      return tx.productionSchedule.update({
+        where: { id },
+        data: {
+          equipmentId,
+          plannedStart,
+          plannedEnd,
+        },
+        include: SCHEDULE_INCLUDE,
+      });
+    });
+
+    return { schedule: result, conflicts: [] };
+  });
 }
 
 /**
@@ -282,32 +295,42 @@ async function updateSchedule(id, data) {
  * @returns {Promise<object>} 更新后排程
  */
 async function updateScheduleStatus(id, status) {
-  const existing = await prisma.productionSchedule.findUnique({ where: { id } });
-  if (!existing) {
-    throw createBusinessError('排程不存在', 404);
-  }
+  return runExclusive(SCHEDULE_LOCK_KEY, async () => {
+    const existing = await prisma.productionSchedule.findUnique({ where: { id } });
+    if (!existing) {
+      throw createBusinessError('排程不存在', 404);
+    }
 
-  const allowed = SCHEDULE_STATUS_TRANSITIONS[existing.status] || [];
-  if (!allowed.includes(status)) {
-    throw createBusinessError(
-      `非法状态流转：${existing.status} 不能变更为 ${status}`,
-      400,
-    );
-  }
+    const allowed = SCHEDULE_STATUS_TRANSITIONS[existing.status] || [];
+    if (!allowed.includes(status)) {
+      throw createBusinessError(
+        `非法状态流转：${existing.status} 不能变更为 ${status}`,
+        400,
+      );
+    }
 
-  const now = new Date();
-  const data = { status };
-  if (status === 'in_progress' && !existing.actualStart) {
-    data.actualStart = now;
-  }
-  if (status === 'completed') {
-    data.actualEnd = now;
-  }
+    const now = new Date();
+    const data = { status };
+    if (status === 'in_progress' && !existing.actualStart) {
+      data.actualStart = now;
+    }
+    if (status === 'completed') {
+      data.actualEnd = now;
+    }
 
-  return prisma.productionSchedule.update({
-    where: { id },
-    data,
-    include: SCHEDULE_INCLUDE,
+    // CAS：仅当状态未被并发修改时才更新，防止重复流转
+    const updated = await prisma.productionSchedule.updateMany({
+      where: { id, status: existing.status },
+      data,
+    });
+    if (updated.count === 0) {
+      throw createBusinessError('排程状态已被其他操作修改，请刷新后重试', 409);
+    }
+
+    return prisma.productionSchedule.findUnique({
+      where: { id },
+      include: SCHEDULE_INCLUDE,
+    });
   });
 }
 
@@ -317,11 +340,13 @@ async function updateScheduleStatus(id, status) {
  * @returns {Promise<void>}
  */
 async function deleteSchedule(id) {
-  const existing = await prisma.productionSchedule.findUnique({ where: { id } });
-  if (!existing) {
-    throw createBusinessError('排程不存在', 404);
-  }
-  await prisma.productionSchedule.delete({ where: { id } });
+  return runExclusive(SCHEDULE_LOCK_KEY, async () => {
+    const existing = await prisma.productionSchedule.findUnique({ where: { id } });
+    if (!existing) {
+      throw createBusinessError('排程不存在', 404);
+    }
+    await prisma.productionSchedule.delete({ where: { id } });
+  });
 }
 
 module.exports = {
